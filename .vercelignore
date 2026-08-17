@@ -1,0 +1,49 @@
+# Ignore SQLite databases
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+ingres_ai.db
+ingres_ai_backup.db
+backend/ingres_ai.db
+backend/groundwater.db
+
+# Ignore virtual environments
+venv/
+.venv/
+backend/venv/
+backend/.venv/
+
+# Ignore node modules
+node_modules/
+frontend/node_modules/
+
+# Ignore local environment configurations
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+backend/.env
+
+# Ignore build artifacts (Vercel builds them on the cloud)
+dist/
+frontend/dist/
+
+# Ignore Python bytecode / caches
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.tox/
+.coverage
+htmlcov/
+
+# Ignore IDE settings & local run logs
+.vscode/
+.idea/
+.vercel/
+.git/
+Thumbs.db
+.DS_Store
