@@ -1,0 +1,43 @@
+:root {
+  /* Color Palette */
+  --primary-color: #1b6ca8;       /* Deep water blue */
+  --primary-hover: #134e7a;
+  --secondary-color: #2e7d32;     /* Environment green */
+  --secondary-hover: #1b5e20;
+  
+  --accent-color: #4db6ac;        /* Minty teal */
+  --background-color: #f7f9fb;    /* Light clean background */
+  --surface-color: #ffffff;       /* Card background */
+  --border-color: #e0e6ed;        /* Soft divider border */
+  
+  /* Text Colors */
+  --text-main: #2c3e50;           /* Slate primary text */
+  --text-muted: #64748b;          /* Grey helper text */
+  --text-light: #ffffff;
+  
+  /* Alert Categories */
+  --color-safe: #2e7d32;
+  --color-semi-critical: #f57c00;
+  --color-critical: #d32f2f;
+  --color-over-exploited: #880e4f;
+  
+  /* Font Stack */
+  --font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  
+  /* Layout Sizing */
+  --sidebar-width: 260px;
+  --sidebar-collapsed-width: 80px;
+  --header-height: 70px;
+  --max-width: 1200px;
+  
+  /* Borders and Shadow Settings */
+  --border-radius-sm: 6px;
+  --border-radius-md: 12px;
+  --border-radius-lg: 18px;
+  
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 12px 24px rgba(0, 0, 0, 0.12);
+  
+  --transition-speed: 0.3s;
+}

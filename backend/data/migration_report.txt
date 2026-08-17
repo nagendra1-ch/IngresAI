@@ -1,0 +1,16 @@
+
+=========================================
+      MIGRATION & VALIDATION REPORT
+=========================================
+Total Normalized Summary Records : 21927
+States Represented               : 29
+Districts Represented            : 723
+
+Missing Metrics:
+  - Missing Rainfall Records    : 21245
+  - Missing Depth Observations  : 0
+  - Missing GWRA Resource Data   : 2397
+
+Geographical Assessments:
+  - Districts with multiple assessment categories: 6848
+=========================================

@@ -1,0 +1,48 @@
+# Python virtual environment
+backend/venv/
+backend/.venv/
+venv/
+.venv/
+
+# Environment files
+backend/.env
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Databases (SQLite)
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+backend/groundwater.db
+backend/ingres_ai.db
+ingres_ai.db
+ingres_ai_backup.db
+
+# Node dependencies and build folders
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+
+# Python cache / bytecode
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.tox/
+.coverage
+htmlcov/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Vercel folder
+.vercel/
