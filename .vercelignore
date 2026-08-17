@@ -40,6 +40,14 @@ frontend/dist/
 .coverage
 htmlcov/
 
+# Ignore local development/test/seed files (not needed by runtime API)
+states/
+backend/data/
+backend/tests/
+backend/scratch/
+backend/scripts/
+backend/migrate_db.py
+
 # Ignore IDE settings & local run logs
 .vscode/
 .idea/
