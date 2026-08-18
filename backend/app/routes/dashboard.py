@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
 from collections import defaultdict
+import time
 from app.database import get_db
 from app.models import Geography, GWRAAssessment, GroundwaterObservation, RainfallRecord, User
 from app.routes.auth import get_current_user
@@ -10,10 +11,13 @@ from app.routes.auth import get_current_user
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
 _resolved_records_cache = None
+_cache_timestamp = 0.0
+_CACHE_TTL = 300.0  # 5 minutes
 
 def get_all_resolved_records(db: Session):
-    global _resolved_records_cache
-    if _resolved_records_cache is not None:
+    global _resolved_records_cache, _cache_timestamp
+    now = time.time()
+    if _resolved_records_cache is not None and (now - _cache_timestamp) < _CACHE_TTL:
         return _resolved_records_cache
 
     geos = db.query(Geography).filter(
@@ -113,6 +117,7 @@ def get_all_resolved_records(db: Session):
         })
         
     _resolved_records_cache = resolved_records
+    _cache_timestamp = time.time()
     return resolved_records
 
 @router.get("/summary")

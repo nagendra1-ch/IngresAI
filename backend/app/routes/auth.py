@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User
-from app.schemas.auth import UserRegister, UserLogin, UserOut, Token
+from app.schemas.auth import UserRegister, UserLogin, UserOut, Token, PasswordChange
 from app.utils.auth import get_password_hash, verify_password, create_access_token, decode_access_token
 from fastapi.security import OAuth2PasswordBearer
 
@@ -91,3 +91,22 @@ def get_me(current_user: User = Depends(get_current_user)):
 @router.post("/logout")
 def logout():
     return {"detail": "Successfully logged out."}
+
+@router.post("/change-password", status_code=status.HTTP_200_OK)
+def change_password(
+    data: PasswordChange,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Allows an authenticated user to change their own password.
+    Verifies the current password before applying the update.
+    """
+    if not verify_password(data.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect."
+        )
+    current_user.password_hash = get_password_hash(data.new_password)
+    db.commit()
+    return {"detail": "Password updated successfully."}

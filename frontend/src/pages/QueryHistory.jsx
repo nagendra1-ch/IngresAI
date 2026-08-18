@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
+import MarkdownRenderer from '../utils/MarkdownRenderer';
 import '../styles/main.css';
 
 const QueryHistory = () => {
@@ -42,29 +43,6 @@ const QueryHistory = () => {
     return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  // Modal Markdown formatter helper
-  const renderResponseText = (text) => {
-    if (!text) return '';
-    return text.split('\n').map((line, idx) => {
-      let formattedLine = line;
-      const boldRegex = /\*\*(.*?)\*\*/g;
-      const italicRegex = /\*(.*?)\*/g;
-      
-      formattedLine = formattedLine.replace(boldRegex, '<strong>$1</strong>');
-      formattedLine = formattedLine.replace(italicRegex, '<em>$1</em>');
-      
-      if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
-        return (
-          <li key={idx} style={{ marginLeft: '20px', listStyleType: 'disc', fontSize: '0.92rem' }} 
-              dangerouslySetInnerHTML={{ __html: formattedLine.substring(2) }} />
-        );
-      }
-      return (
-        <p key={idx} style={{ marginBottom: '10px', fontSize: '0.95rem', lineHeight: '1.6' }} 
-           dangerouslySetInnerHTML={{ __html: formattedLine }} />
-      );
-    });
-  };
 
   return (
     <div className="container-inner">
@@ -170,7 +148,7 @@ const QueryHistory = () => {
             maxWidth: '650px',
             maxHeight: '85vh',
             overflowY: 'auto',
-            backgroundColor: 'white',
+            backgroundColor: 'var(--surface-color)',
             position: 'relative'
           }} onClick={(e) => e.stopPropagation()}>
             
@@ -186,31 +164,31 @@ const QueryHistory = () => {
             }} onClick={() => setSelectedLog(null)}>
               &times;
             </button>
-
+ 
             <h3 className="card-title" style={{ color: 'var(--primary-color)', fontSize: '1.3rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px', marginBottom: '20px' }}>
               Query Record Details
             </h3>
-
+ 
             <div style={{ marginBottom: '20px' }}>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Date Mapped</div>
               <p style={{ fontSize: '0.9rem', color: 'var(--text-main)' }}>{getFormatDate(selectedLog.created_at)}</p>
             </div>
-
-            <div style={{ marginBottom: '20px', backgroundColor: '#f8fafc', padding: '15px', borderRadius: 'var(--border-radius-sm)', borderLeft: '3px solid var(--primary-color)' }}>
+ 
+            <div style={{ marginBottom: '20px', backgroundColor: 'var(--surface-secondary)', padding: '15px', borderRadius: 'var(--border-radius-sm)', borderLeft: '3px solid var(--primary-color)' }}>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: '5px' }}>User Query</div>
-              <p style={{ fontSize: '0.95rem', fontWeight: 600 }}>"{selectedLog.query}"</p>
+              <p style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-main)' }}>"{selectedLog.query}"</p>
             </div>
-
+ 
             <div style={{ marginBottom: '20px' }}>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: '8px' }}>INGRES AI Assistant Response</div>
               <div style={{
-                backgroundColor: '#f1f5f9',
+                backgroundColor: 'var(--surface-secondary)',
                 padding: '20px',
                 borderRadius: 'var(--border-radius-sm)',
                 color: 'var(--text-main)',
                 border: '1px solid var(--border-color)',
               }}>
-                {renderResponseText(selectedLog.response)}
+                <MarkdownRenderer text={selectedLog.response} />
               </div>
             </div>
 

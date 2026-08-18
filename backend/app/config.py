@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 1 day
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
+    # Weather configuration
+    WEATHER_CACHE_TTL: int = 600  # seconds, default 10 minutes
+    WEATHER_FORECAST_DAYS: int = 3
 
     model_config = SettingsConfigDict(
         env_file=".env",

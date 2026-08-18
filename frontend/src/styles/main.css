@@ -246,7 +246,7 @@ a {
 }
 
 .data-table th {
-  background-color: #f1f5f9;
+  background-color: var(--surface-secondary, #f1f5f9);
   padding: 16px 20px;
   font-weight: 600;
   color: var(--text-main);
@@ -264,7 +264,7 @@ a {
 }
 
 .data-table tr:hover td {
-  background-color: #f8fafc;
+  background-color: var(--surface-secondary, #f8fafc);
 }
 
 /* Status Badges */

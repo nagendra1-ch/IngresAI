@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
+import { ToastProvider } from './context/ToastContext';
 import ProtectedRoute from './components/ProtectedRoute';
 
 // Layouts
@@ -15,6 +16,7 @@ import Assistant from './pages/Assistant';
 import Districts from './pages/Districts';
 import DistrictDetails from './pages/DistrictDetails';
 import Compare from './pages/Compare';
+import Forecast from './pages/Forecast';
 import QueryHistory from './pages/QueryHistory';
 import Profile from './pages/Profile';
 import AdminDashboard from './pages/AdminDashboard';
@@ -22,6 +24,7 @@ import AdminDashboard from './pages/AdminDashboard';
 function App() {
   return (
     <AuthProvider>
+      <ToastProvider>
       <Router>
         <Routes>
           {/* Auth Pages (Public, unauthenticated) */}
@@ -75,6 +78,14 @@ function App() {
               } 
             />
             <Route 
+              path="/forecast" 
+              element={
+                <ProtectedRoute>
+                  <Forecast />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
               path="/history" 
               element={
                 <ProtectedRoute>
@@ -100,20 +111,13 @@ function App() {
                 </ProtectedRoute>
               } 
             />
-            <Route 
-              path="/admin/users" 
-              element={
-                <ProtectedRoute adminOnly={true}>
-                  <AdminDashboard />
-                </ProtectedRoute>
-              } 
-            />
           </Route>
 
           {/* Catch-all fallback redirects to home */}
           <Route path="*" element={<LandingPage />} />
         </Routes>
       </Router>
+      </ToastProvider>
     </AuthProvider>
   );
 }

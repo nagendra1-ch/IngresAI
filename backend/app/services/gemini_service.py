@@ -545,4 +545,9 @@ class GeminiService:
                 f"- Rainfall: {rain_src}\n"
             )
             
-        return "I am ready to answer your questions. Try asking about a specific district or comparing two districts."
+        return (
+            "I couldn't find specific groundwater data for that query in the IN-GRES database. "
+            "Try asking about a specific district (e.g. *'What is the groundwater level in Guntur?'*), "
+            "compare two districts (e.g. *'Compare Kurnool and Guntur'*), "
+            "or ask a national ranking question (e.g. *'Which district has the highest groundwater level?'*)."
+        )

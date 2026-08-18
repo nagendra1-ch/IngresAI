@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
+import MarkdownRenderer from '../utils/MarkdownRenderer';
+import { useToast } from '../context/ToastContext';
 import '../styles/main.css';
 import '../styles/chat.css';
 
@@ -21,6 +23,19 @@ const Assistant = () => {
   const [error, setError] = useState('');
   const [conversationId, setConversationId] = useState(null);
   const navigate = useNavigate();
+  const { showToast } = useToast();
+  
+  // Ref used to auto-scroll the chat to the bottom on new messages
+  const messagesEndRef = useRef(null);
+
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
+  // Auto-scroll whenever messages array changes
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, loading, scrollToBottom]);
 
   // Load chat query history on startup
   const fetchHistory = async () => {
@@ -97,36 +112,20 @@ const Assistant = () => {
     ]);
   };
 
-  const handleCopyText = (text) => {
-    navigator.clipboard.writeText(text);
-    alert("Copied response to clipboard!");
+  const handleNewChat = () => {
+    setMessages([]);
+    setConversationId(null);
+    setQuery('');
+    setError('');
   };
 
-  // Basic formatter to render bold and bullet markdown in chat window
-  const renderMessageText = (text) => {
-    if (!text) return '';
-    return text.split('\n').map((line, idx) => {
-      // Bold formatter **text**
-      let formattedLine = line;
-      const boldRegex = /\*\*(.*?)\*\*/g;
-      const italicRegex = /\*(.*?)\*/g;
-      
-      formattedLine = formattedLine.replace(boldRegex, '<strong>$1</strong>');
-      formattedLine = formattedLine.replace(italicRegex, '<em>$1</em>');
-      
-      // Bullets formatter
-      if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
-        return (
-          <li key={idx} style={{ marginLeft: '20px', listStyleType: 'disc' }} 
-              dangerouslySetInnerHTML={{ __html: formattedLine.substring(2) }} />
-        );
-      }
-      
-      return (
-        <p key={idx} style={{ marginBottom: '8px' }} 
-           dangerouslySetInnerHTML={{ __html: formattedLine }} />
-      );
-    });
+  const handleCopyText = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('Response copied to clipboard!', 'success');
+    } catch {
+      showToast('Failed to copy to clipboard.', 'error');
+    }
   };
 
   return (
@@ -136,6 +135,16 @@ const Assistant = () => {
           <h1 className="page-title">INGRES AI Assistant</h1>
           <p className="page-subtitle">Chat in natural language to query and compare groundwater reserves.</p>
         </div>
+        {messages.length > 0 && (
+          <button
+            className="btn btn-outline"
+            onClick={handleNewChat}
+            style={{ padding: '8px 18px', fontSize: '0.88rem', gap: '6px' }}
+            title="Clear current conversation and start fresh"
+          >
+            ✨ New Chat
+          </button>
+        )}
       </header>
 
       <div className="chat-layout">
@@ -197,7 +206,7 @@ const Assistant = () => {
                 <div key={idx} className={`message ${msg.sender}`}>
                   <div className="message-bubble">
                     <div className="message-text">
-                      {renderMessageText(msg.text)}
+                      <MarkdownRenderer text={msg.text} />
                     </div>
                     
                     {msg.sender === 'ai' && !msg.isError && (
@@ -207,7 +216,7 @@ const Assistant = () => {
                           <span className="message-source-btn" onClick={() => handleCopyText(msg.text)}>
                             📋 Copy
                           </span>
-                          <span className="message-source-btn" onClick={() => alert("Thank you for your feedback!")}>
+                          <span className="message-source-btn" onClick={() => showToast('Thank you for your feedback!', 'success')}>
                             👍 Feedback
                           </span>
                           {msg.district_id && (
@@ -242,6 +251,9 @@ const Assistant = () => {
                 </div>
               </div>
             )}
+
+            {/* Invisible anchor element for auto-scroll */}
+            <div ref={messagesEndRef} />
           </div>
 
           {/* Bottom Chat Input Form */}
@@ -258,6 +270,7 @@ const Assistant = () => {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 disabled={loading}
+                autoComplete="off"
               />
               
               <button 

@@ -3,6 +3,9 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer 
 } from 'recharts';
 import api from '../services/api';
+import MarkdownRenderer from '../utils/MarkdownRenderer';
+import WeatherCard from '../components/WeatherCard';
+import weatherIconMap from '../utils/weatherIconMap';
 import '../styles/main.css';
 
 const Compare = () => {
@@ -95,29 +98,33 @@ const Compare = () => {
     ];
   };
 
-  // Helper formatting for bolding text in markdown AI responses
-  const renderAIResponse = (text) => {
-    if (!text) return '';
-    return text.split('\n').map((line, idx) => {
-      let formattedLine = line;
-      const boldRegex = /\*\*(.*?)\*\*/g;
-      const italicRegex = /\*(.*?)\*/g;
-      
-      formattedLine = formattedLine.replace(boldRegex, '<strong>$1</strong>');
-      formattedLine = formattedLine.replace(italicRegex, '<em>$1</em>');
-      
-      if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
-        return (
-          <li key={idx} style={{ marginLeft: '15px', listStyleType: 'square', fontSize: '0.92rem' }} 
-              dangerouslySetInnerHTML={{ __html: formattedLine.substring(2) }} />
-        );
-      }
-      return (
-        <p key={idx} style={{ marginBottom: '10px', fontSize: '0.92rem', lineHeight: '1.5' }} 
-           dangerouslySetInnerHTML={{ __html: formattedLine }} />
-      );
-    });
+  // Weather comparison chart data
+  const getWeatherChartData = () => {
+    if (!comparison) return [];
+    const w1 = comparison.weather_1;
+    const w2 = comparison.weather_2;
+    if (!w1?.current && !w2?.current) return [];
+    const d1Name = comparison.district_1.district_name;
+    const d2Name = comparison.district_2.district_name;
+    return [
+      {
+        metric: 'Temperature (°C)',
+        [d1Name]: w1?.current?.temperature ?? null,
+        [d2Name]: w2?.current?.temperature ?? null,
+      },
+      {
+        metric: 'Humidity (%)',
+        [d1Name]: w1?.current?.humidity ?? null,
+        [d2Name]: w2?.current?.humidity ?? null,
+      },
+      {
+        metric: 'Wind (km/h)',
+        [d1Name]: w1?.current?.wind_speed ?? null,
+        [d2Name]: w2?.current?.wind_speed ?? null,
+      },
+    ];
   };
+
 
   return (
     <div className="container-inner">
@@ -291,7 +298,7 @@ const Compare = () => {
           <section className="card" style={{ marginBottom: '30px', borderLeft: '4px solid var(--primary-color)' }}>
             <h3 className="card-title" style={{ color: 'var(--primary-color)' }}>🤖 INGRES AI Comparative Analysis</h3>
             <div style={{ marginTop: '10px', color: 'var(--text-main)' }}>
-              {renderAIResponse(comparison.explanation)}
+              <MarkdownRenderer text={comparison.explanation} fontSize="0.92rem" lineHeight="1.5" />
             </div>
           </section>
 
@@ -369,6 +376,53 @@ const Compare = () => {
               )}
             </div>
           </section>
+
+          {/* Weather Comparison Section */}
+          {(comparison.weather_1 || comparison.weather_2) && (
+            <section style={{ marginBottom: '30px' }}>
+              <h3 className="card-title" style={{ marginBottom: '16px', fontSize: '1.15rem' }}>
+                🌤️ Current Weather Comparison
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 400, marginLeft: '10px' }}>Source: Open-Meteo</span>
+              </h3>
+              <div className="data-grid-2" style={{ marginBottom: '20px' }}>
+                {comparison.weather_1 && (
+                  <WeatherCard
+                    location={comparison.weather_1.location || comparison.district_1.district_name}
+                    current={comparison.weather_1.current}
+                    forecast={comparison.weather_1.forecast}
+                    updatedAt={comparison.weather_1.current?.time}
+                  />
+                )}
+                {comparison.weather_2 && (
+                  <WeatherCard
+                    location={comparison.weather_2.location || comparison.district_2.district_name}
+                    current={comparison.weather_2.current}
+                    forecast={comparison.weather_2.forecast}
+                    updatedAt={comparison.weather_2.current?.time}
+                  />
+                )}
+              </div>
+              {/* Weather metrics chart */}
+              {getWeatherChartData().length > 0 && (
+                <div className="card">
+                  <h3 className="card-title">Weather Metrics Comparison</h3>
+                  <div style={{ minHeight: '240px' }}>
+                    <ResponsiveContainer width="100%" height={220}>
+                      <BarChart data={getWeatherChartData()}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="metric" />
+                        <YAxis />
+                        <Tooltip />
+                        <Legend />
+                        <Bar dataKey={comparison.district_1.district_name} fill="var(--primary-color)" />
+                        <Bar dataKey={comparison.district_2.district_name} fill="#4db6ac" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
         </>
       )}
     </div>

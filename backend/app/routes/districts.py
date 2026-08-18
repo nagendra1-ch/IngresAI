@@ -232,7 +232,8 @@ def search_districts(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Filter districts by name matching or state matching. Returns latest statistics. Requires auth.
+    Filter districts by name matching or state matching.
+    Returns lightweight card data (no per-district history loops). Requires auth.
     """
     q = db.query(Geography).filter(
         Geography.normalized_mandal_name == None,
@@ -242,9 +243,112 @@ def search_districts(
         q = q.filter(Geography.district_name.ilike(f"%{query}%"))
     if state:
         q = q.filter(Geography.state_name.ilike(state))
-        
-    results = q.order_by(Geography.district_name).all()
-    return [resolve_district_response(db, geo) for geo in results]
+
+    results = q.order_by(Geography.district_name).limit(100).all()
+
+    if not results:
+        return []
+
+    # ---- Batch fetch latest groundwater depth per district ----
+    from sqlalchemy import text
+    state_dist_pairs = list({(g.normalized_state_name, g.normalized_district_name) for g in results})
+
+    # Max obs year per district (single query)
+    obs_max_rows = db.query(
+        Geography.normalized_state_name,
+        Geography.normalized_district_name,
+        func.max(GroundwaterObservation.observation_year).label("max_year")
+    ).join(GroundwaterObservation).filter(
+        Geography.normalized_mandal_name == None,
+        Geography.normalized_village_name == None
+    ).group_by(
+        Geography.normalized_state_name,
+        Geography.normalized_district_name
+    ).all()
+    obs_max_map = {(r[0], r[1]): r[2] for r in obs_max_rows}
+
+    unique_obs_years = list(set(obs_max_map.values()))
+    obs_rows = db.query(
+        Geography.normalized_state_name,
+        Geography.normalized_district_name,
+        GroundwaterObservation.depth_to_water_level_m_bgl,
+        GroundwaterObservation.observation_year
+    ).join(Geography).filter(
+        Geography.normalized_mandal_name == None,
+        Geography.normalized_village_name == None,
+        GroundwaterObservation.observation_year.in_(unique_obs_years)
+    ).all() if unique_obs_years else []
+
+    from collections import defaultdict
+    obs_depths: dict = defaultdict(list)
+    for sn, dn, depth, yr in obs_rows:
+        if depth is not None and obs_max_map.get((sn, dn)) == yr:
+            obs_depths[(sn, dn)].append(depth)
+    depth_avg = {k: round(sum(v) / len(v), 2) for k, v in obs_depths.items()}
+
+    # ---- Batch fetch latest rainfall per district ----
+    rain_max_rows = db.query(
+        Geography.normalized_state_name,
+        Geography.normalized_district_name,
+        func.max(RainfallRecord.rainfall_year).label("max_year")
+    ).join(RainfallRecord).filter(
+        Geography.normalized_mandal_name == None,
+        Geography.normalized_village_name == None
+    ).group_by(
+        Geography.normalized_state_name,
+        Geography.normalized_district_name
+    ).all()
+    rain_max_map = {(r[0], r[1]): r[2] for r in rain_max_rows}
+
+    unique_rain_years = list(set(rain_max_map.values()))
+    rain_rows = db.query(
+        Geography.normalized_state_name,
+        Geography.normalized_district_name,
+        RainfallRecord.rainfall_mm,
+        RainfallRecord.rainfall_year
+    ).join(Geography).filter(
+        Geography.normalized_mandal_name == None,
+        Geography.normalized_village_name == None,
+        RainfallRecord.rainfall_year.in_(unique_rain_years)
+    ).all() if unique_rain_years else []
+
+    rain_vals: dict = defaultdict(list)
+    for sn, dn, rain, yr in rain_rows:
+        if rain is not None and rain_max_map.get((sn, dn)) == yr:
+            rain_vals[(sn, dn)].append(rain)
+    rain_avg = {k: round(sum(v) / len(v), 1) for k, v in rain_vals.items()}
+
+    # ---- Batch fetch GWRA assessments ----
+    geo_ids = [g.id for g in results]
+    gwra_rows = db.query(GWRAAssessment).filter(GWRAAssessment.geography_id.in_(geo_ids)).all()
+    gwra_map = {g.geography_id: g for g in gwra_rows}
+
+    # ---- Assemble lightweight response ----
+    output = []
+    for geo in results:
+        key = (geo.normalized_state_name, geo.normalized_district_name)
+        gwra = gwra_map.get(geo.id)
+        avg_depth = depth_avg.get(key)
+        avg_rain = rain_avg.get(key)
+        stage = gwra.stage_of_groundwater_extraction_percent if gwra else None
+        if stage is None and gwra and gwra.annual_groundwater_extraction_ham and gwra.annual_extractable_groundwater_resource_ham:
+            stage = round((gwra.annual_groundwater_extraction_ham / gwra.annual_extractable_groundwater_resource_ham) * 100.0, 2)
+
+        output.append({
+            "id": geo.id,
+            "district_name": geo.district_name,
+            "state_name": geo.state_name,
+            "latitude": geo.latitude,
+            "longitude": geo.longitude,
+            "depth_to_water_level_m_bgl": avg_depth,
+            "rainfall_mm": avg_rain,
+            "stage_of_groundwater_extraction_percent": stage,
+            "assessment_category": (gwra.district_assessment_category if gwra else None) or "Safe",
+            "annual_groundwater_recharge_ham": gwra.annual_groundwater_recharge_ham if gwra else None,
+            "annual_groundwater_extraction_ham": gwra.annual_groundwater_extraction_ham if gwra else None,
+        })
+
+    return output
 
 @router.get("/{id}")
 def get_district_by_id(id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):

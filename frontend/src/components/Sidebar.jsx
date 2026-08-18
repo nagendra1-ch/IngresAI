@@ -76,6 +76,12 @@ const Sidebar = () => {
           </li>
 
           <li className="sidebar-item">
+            <NavLink to="/forecast" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`} onClick={closeSidebar}>
+              <span>🌧️</span> Forecast
+            </NavLink>
+          </li>
+
+          <li className="sidebar-item">
             <NavLink to="/history" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`} onClick={closeSidebar}>
               <span>📜</span> My Query History
             </NavLink>
@@ -87,7 +93,6 @@ const Sidebar = () => {
             </NavLink>
           </li>
 
-          {/* Admin panel section */}
           {isAdmin && (
             <>
               <div className="sidebar-section-title">Administration</div>
@@ -95,12 +100,6 @@ const Sidebar = () => {
               <li className="sidebar-item">
                 <NavLink to="/admin" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`} onClick={closeSidebar} end>
                   <span>🛡️</span> Admin Dashboard
-                </NavLink>
-              </li>
-
-              <li className="sidebar-item">
-                <NavLink to="/admin/users" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`} onClick={closeSidebar}>
-                  <span>👥</span> User Activity
                 </NavLink>
               </li>
             </>

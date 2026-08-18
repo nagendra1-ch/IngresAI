@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import '../styles/main.css';
 
@@ -10,6 +11,7 @@ const AdminDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
+  const navigate = useNavigate();
 
   const fetchAdminData = async () => {
     try {
@@ -228,7 +230,16 @@ const AdminDashboard = () => {
                   </td>
                   <td>
                     {q.district_name !== 'N/A' ? (
-                      <span className="badge badge-safe" style={{ backgroundColor: 'rgba(46, 125, 50, 0.1)' }}>
+                      <span
+                        className="badge badge-safe"
+                        style={{
+                          backgroundColor: 'rgba(46, 125, 50, 0.1)',
+                          cursor: q.district_id ? 'pointer' : 'default',
+                          textDecoration: q.district_id ? 'underline' : 'none',
+                        }}
+                        onClick={() => q.district_id && navigate(`/districts/${q.district_id}`)}
+                        title={q.district_id ? `View details for ${q.district_name}` : q.district_name}
+                      >
                         {q.district_name}
                       </span>
                     ) : (

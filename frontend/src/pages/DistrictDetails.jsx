@@ -5,11 +5,14 @@ import {
 } from 'recharts';
 import api from '../services/api';
 import '../styles/main.css';
+import WeatherCard from '../components/WeatherCard';
+import '../utils/weatherIconMap';
 
 const DistrictDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const [district, setDistrict] = useState(null);
+  const [weather, setWeather] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -20,6 +23,17 @@ const DistrictDetails = () => {
         const res = await api.get(`/api/districts/${id}`);
         setDistrict(res.data);
         setLoading(false);
+        if (res.data?.district_name) {
+          try {
+            const weatherRes = await api.get(`/api/weather/district/${encodeURIComponent(res.data.district_name)}`);
+            setWeather(weatherRes.data);
+          } catch (wErr) {
+            console.warn('Weather fetch failed', wErr);
+            setWeather(null);
+          }
+        } else {
+          setWeather(null);
+        }
       } catch (err) {
         console.error("Failed to load district detail", err);
         setError(err.response?.data?.detail || "Groundwater information is currently unavailable for this district.");
@@ -84,6 +98,15 @@ const DistrictDetails = () => {
           {district?.assessment?.category || 'Safe'}
         </span>
       </header>
+      {/* Weather Card */}
+      {weather && (
+        <WeatherCard
+          location={weather.location || district?.district_name || 'India'}
+          current={weather.current}
+          forecast={weather.forecast}
+          updatedAt={weather.updated_at || weather.updatedAt}
+        />
+      )}
 
       {/* Numerical Metrics Cards */}
       <section className="stats-grid">

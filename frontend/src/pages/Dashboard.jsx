@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, 
   PieChart, Pie, Cell, ResponsiveContainer 
@@ -6,14 +7,19 @@ import {
 import api from '../services/api';
 import ErrorBoundary from '../components/ErrorBoundary';
 import '../styles/main.css';
+import WeatherCard from '../components/WeatherCard';
+import '../utils/weatherIconMap';
+import '../styles/forecast.css';
 
 const COLORS = ['#2e7d32', '#f57c00', '#d32f2f', '#880e4f']; // safe, semi-critical, critical, over-exploited
 
 const Dashboard = () => {
   const [summary, setSummary] = useState(null);
   const [stateStats, setStateStats] = useState([]);
+  const [weather, setWeather] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [rainfallForecast, setRainfallForecast] = useState(null);
   
   // Filtering States
   const [selectedState, setSelectedState] = useState('');
@@ -89,14 +95,36 @@ const Dashboard = () => {
           `/api/dashboard/summary?state_name=${encodeURIComponent(selectedState)}&district_name=${encodeURIComponent(district)}`
         );
         setSummary(summaryRes.data);
+        // fetch weather for district
+        try {
+          const weatherRes = await api.get(`/api/weather/district/${encodeURIComponent(district)}`);
+          setWeather(weatherRes.data);
+        } catch (wErr) {
+          console.warn('Weather fetch failed', wErr);
+          setWeather(null);
+        }
       } else {
         const summaryRes = await api.get(`/api/dashboard/summary?state_name=${encodeURIComponent(selectedState)}`);
         setSummary(summaryRes.data);
+        setWeather(null);
+      }
+      // Also fetch rainfall forecast strip data
+      if (district) {
+        try {
+          const forecastRes = await api.get(`/api/weather/forecast/${encodeURIComponent(district)}`);
+          setRainfallForecast(forecastRes.data);
+        } catch (fErr) {
+          console.warn('Forecast fetch failed', fErr);
+          setRainfallForecast(null);
+        }
+      } else {
+        setRainfallForecast(null);
       }
       setLoading(false);
     } catch (err) {
       console.error("Failed to filter by district", err);
       setError("Unable to filter statistics. Please try again.");
+      setWeather(null);
       setLoading(false);
     }
   };
@@ -105,6 +133,7 @@ const Dashboard = () => {
     setSelectedState('');
     setSelectedDistrict('');
     setDistrictsList([]);
+    setWeather(null);
     setLoading(true);
     try {
       const [summaryRes, stateRes] = await Promise.all([
@@ -168,6 +197,16 @@ const Dashboard = () => {
                 : 'National survey summaries, rainfall distributions, and district assessments.'}
           </p>
         </div>
+        
+        {/* Weather Card */}
+        {weather && (
+          <WeatherCard
+            location={weather.location || selectedDistrict || 'India'}
+            current={weather.current}
+            forecast={weather.forecast}
+            updatedAt={weather.updated_at || weather.updatedAt}
+          />
+        )}
         
         {/* Filtering Controls */}
         <div style={{ display: 'flex', gap: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -250,6 +289,54 @@ const Dashboard = () => {
           <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Annual average deviation</div>
         </div>
       </section>
+
+      {/* Live Rainfall Forecast Strip */}
+      {rainfallForecast && selectedDistrict && (
+        <section className="rainfall-strip" style={{ marginBottom: '24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginRight: '12px' }}>
+            <span className="live-indicator">LIVE</span>
+            <strong style={{ fontSize: '0.88rem', color: 'var(--text-main)' }}>Rainfall Status — {selectedDistrict}</strong>
+          </div>
+          <div className="strip-item">
+            <span className="strip-value" style={{ color: '#0ea5e9' }}>
+              {rainfallForecast.current_rainfall_mm ?? 0} mm
+            </span>
+            <span className="strip-label">Current Precip</span>
+          </div>
+          <div className="strip-item">
+            <span className="strip-value">
+              {rainfallForecast.daily_forecast?.[0]?.precipitation_sum?.toFixed(1) ?? '--'} mm
+            </span>
+            <span className="strip-label">Today Forecast</span>
+          </div>
+          <div className="strip-item">
+            <span className="strip-value">
+              {rainfallForecast.daily_forecast?.[1]?.precipitation_sum?.toFixed(1) ?? '--'} mm
+            </span>
+            <span className="strip-label">Tomorrow</span>
+          </div>
+          <div className="strip-item">
+            <span className="strip-value" style={{ color: 'var(--secondary-color)' }}>
+              {rainfallForecast.forecast_total_rain_mm?.toFixed(1) ?? '--'} mm
+            </span>
+            <span className="strip-label">7-Day Total</span>
+          </div>
+          {rainfallForecast.groundwater_impact && (
+            <div className="strip-item">
+              <span className="strip-value" style={{ color: rainfallForecast.groundwater_impact.recharge_potential === 'High' ? 'var(--color-safe)' : rainfallForecast.groundwater_impact.recharge_potential === 'Moderate' ? '#0ea5e9' : 'var(--color-semi-critical)' }}>
+                {rainfallForecast.groundwater_impact.recharge_potential}
+              </span>
+              <span className="strip-label">Recharge Potential</span>
+            </div>
+          )}
+          <Link
+            to="/forecast"
+            style={{ marginLeft: 'auto', fontSize: '0.82rem', fontWeight: 600, color: 'var(--primary-color)', textDecoration: 'none' }}
+          >
+            View Full Forecast →
+          </Link>
+        </section>
+      )}
 
       {/* Recharge vs Extraction Summary Card banner */}
       <section className="card" style={{ marginBottom: '30px', background: 'linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%)' }}>

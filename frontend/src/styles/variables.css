@@ -1,5 +1,5 @@
 :root {
-  /* Color Palette */
+  /* Color Palette — Light Mode */
   --primary-color: #1b6ca8;       /* Deep water blue */
   --primary-hover: #134e7a;
   --secondary-color: #2e7d32;     /* Environment green */
@@ -8,6 +8,7 @@
   --accent-color: #4db6ac;        /* Minty teal */
   --background-color: #f7f9fb;    /* Light clean background */
   --surface-color: #ffffff;       /* Card background */
+  --surface-secondary: #f8fafc;   /* Secondary surface (tables, sidebars) */
   --border-color: #e0e6ed;        /* Soft divider border */
   
   /* Text Colors */
@@ -40,4 +41,28 @@
   --shadow-lg: 0 12px 24px rgba(0, 0, 0, 0.12);
   
   --transition-speed: 0.3s;
+}
+
+/* ── Dark Mode Variables ─────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background-color: #0f1117;
+    --surface-color: #1a1d27;
+    --surface-secondary: #1f2330;
+    --border-color: #2d3347;
+
+    --text-main: #e2e8f0;
+    --text-muted: #8b9ab1;
+    --text-light: #ffffff;
+
+    --primary-color: #4a9ed6;
+    --primary-hover: #3a8abf;
+    --secondary-color: #4caf50;
+    --secondary-hover: #388e3c;
+    --accent-color: #4db6ac;
+
+    --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 12px 24px rgba(0, 0, 0, 0.5);
+  }
 }

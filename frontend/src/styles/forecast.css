@@ -1,0 +1,279 @@
+/* ─── Forecast Page Styles ─────────────────────────────────── */
+
+/* Impact card with gradient background */
+.forecast-impact-card {
+  border-radius: var(--border-radius-md);
+  padding: 24px;
+  margin-bottom: 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+.forecast-impact-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.06;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 20% 50%, currentColor, transparent 70%);
+}
+
+.forecast-impact-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.impact-safe {
+  background: linear-gradient(135deg, rgba(46, 125, 50, 0.08) 0%, rgba(76, 175, 80, 0.04) 100%);
+  border-left: 4px solid var(--color-safe);
+  color: var(--color-safe);
+}
+
+.impact-semi-critical {
+  background: linear-gradient(135deg, rgba(245, 124, 0, 0.08) 0%, rgba(255, 167, 38, 0.04) 100%);
+  border-left: 4px solid var(--color-semi-critical);
+  color: var(--color-semi-critical);
+}
+
+.impact-critical {
+  background: linear-gradient(135deg, rgba(211, 47, 47, 0.08) 0%, rgba(239, 83, 80, 0.04) 100%);
+  border-left: 4px solid var(--color-critical);
+  color: var(--color-critical);
+}
+
+.impact-over-exploited {
+  background: linear-gradient(135deg, rgba(136, 14, 79, 0.08) 0%, rgba(173, 20, 87, 0.04) 100%);
+  border-left: 4px solid var(--color-over-exploited);
+  color: var(--color-over-exploited);
+}
+
+/* Recharge potential badge */
+.recharge-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.recharge-high {
+  background: rgba(46, 125, 50, 0.12);
+  color: var(--color-safe);
+}
+
+.recharge-moderate {
+  background: rgba(14, 165, 233, 0.12);
+  color: #0ea5e9;
+}
+
+.recharge-low {
+  background: rgba(245, 124, 0, 0.12);
+  color: var(--color-semi-critical);
+}
+
+.recharge-minimal {
+  background: rgba(211, 47, 47, 0.12);
+  color: var(--color-critical);
+}
+
+/* 7-day forecast grid */
+.forecast-day-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+}
+
+.forecast-day-card {
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-sm);
+  padding: 14px 10px;
+  text-align: center;
+  transition: transform var(--transition-speed), box-shadow var(--transition-speed);
+}
+
+.forecast-day-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.forecast-day-card .day-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 6px;
+}
+
+.forecast-day-card .day-icon {
+  font-size: 32px;
+  color: var(--primary-color);
+  margin: 4px 0;
+}
+
+.forecast-day-card .day-temp {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 4px 0;
+}
+
+.forecast-day-card .day-detail {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin: 2px 0;
+}
+
+.forecast-day-card .day-rain {
+  font-size: 0.75rem;
+  color: #0ea5e9;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+/* Hourly rain timeline container */
+.hourly-timeline-container {
+  min-height: 240px;
+  padding: 10px 0;
+}
+
+/* Impact metric row */
+.impact-metrics-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.impact-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 12px;
+  border-radius: var(--border-radius-sm);
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid var(--border-color);
+}
+
+@media (prefers-color-scheme: dark) {
+  .impact-metric {
+    background: rgba(255, 255, 255, 0.04);
+  }
+}
+
+.impact-metric .metric-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.impact-metric .metric-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* Soil moisture chart section */
+.soil-moisture-section {
+  min-height: 220px;
+  padding: 10px 0;
+}
+
+/* Selector row for forecast page */
+.forecast-selector-row {
+  display: flex;
+  gap: 15px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+.forecast-selector-row .form-group {
+  flex: 1;
+  min-width: 200px;
+  margin: 0;
+}
+
+.forecast-selector-row .form-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.forecast-selector-row select {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: var(--border-radius-sm);
+  border: 1px solid var(--border-color);
+  outline: none;
+  background: var(--surface-color);
+  color: var(--text-main);
+  font-family: var(--font-family);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: border-color var(--transition-speed);
+}
+
+.forecast-selector-row select:focus {
+  border-color: var(--primary-color);
+}
+
+/* Live rainfall pulse indicator */
+.live-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-safe);
+}
+
+.live-indicator::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-safe);
+  animation: pulse-live 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-live {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+
+/* Compact rainfall strip (for Dashboard) */
+.rainfall-strip {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
+  border-radius: var(--border-radius-sm);
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.06) 0%, rgba(27, 108, 168, 0.04) 100%);
+  border: 1px solid var(--border-color);
+  flex-wrap: wrap;
+}
+
+.rainfall-strip .strip-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 70px;
+}
+
+.rainfall-strip .strip-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.rainfall-strip .strip-label {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}

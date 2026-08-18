@@ -4,16 +4,140 @@ from sqlalchemy import func
 from typing import List, Optional
 import uuid
 import re
+import asyncio
 
 from app.database import get_db
 from app.models import Geography, GeographyAlias, GWRAAssessment, GroundwaterObservation, RainfallRecord, QueryHistory, ResultAccess, User, Conversation, ConversationMessage
 from app.routes.auth import get_current_user
 from app.schemas.query import ChatRequest, ChatResponse, QueryOut, LocationSchema, AssessmentSchema, GroundwaterSchema, RainfallSchema, ResourcesSchema, ConversationContextSchema
 from app.services.gemini_service import GeminiService
+from app.services.weather_service import WeatherService
 from app.routes.districts import resolve_district_response
 from app.config import settings
 from app.utils.temporal import normalize_period_with_year, validate_and_normalize_metadata
 from collections import defaultdict
+
+def save_query_history(db: Session, user_id: int, query: str, response: str, geography_id: Optional[int] = None):
+    try:
+        qh = QueryHistory(
+            user_id=user_id,
+            query=query,
+            response=response,
+            geography_id=geography_id
+        )
+        db.add(qh)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[INGRES-AI] Failed to log query history: {e}")
+
+# ---------------------------------------------------------------------------
+# Weather intent constants & helpers
+# ---------------------------------------------------------------------------
+WEATHER_KEYWORDS = {
+    "weather", "temperature", "humidity", "forecast", "raining",
+    "wind", "windspeed", "wind speed", "sunny", "cloudy",
+    "storm", "thunderstorm", "drizzle", "heatwave", "haze",
+    "feels like", "apparent temperature", "current weather",
+    "today's weather", "tomorrow's weather", "weather condition",
+    "weather forecast", "3-day", "3 day",
+}
+# Rainfall / precipitation keywords that belong to the OFFICIAL dataset
+RAINFALL_ONLY_KEYWORDS = {"rainfall", "rain", "precipitation"}
+
+_weather_service_singleton: Optional[WeatherService] = None
+
+def _get_weather_service() -> WeatherService:
+    global _weather_service_singleton
+    if _weather_service_singleton is None:
+        _weather_service_singleton = WeatherService()
+    return _weather_service_singleton
+
+
+def detect_weather_intent(query_lower: str) -> tuple[bool, bool]:
+    """Return (has_weather_intent, has_rainfall_only_intent).
+
+    has_weather_intent   – True when query wants live Open-Meteo weather
+    has_rainfall_only    – True when query only asks about official rainfall data
+    """
+    tokens = set(re.findall(r'[a-z0-9]+', query_lower))
+    full = query_lower  # also check phrases
+
+    weather_hit = any(kw in full for kw in WEATHER_KEYWORDS) or bool(tokens & WEATHER_KEYWORDS)
+    # Treat "current precipitation" as a weather query
+    is_current_precip = ("current" in full or "live" in full or "now" in full) and any(kw in full for kw in RAINFALL_ONLY_KEYWORDS)
+    # Plain "rainfall" / "rain" without weather qualifiers = official rainfall only
+    rainfall_hit = any(kw in full for kw in RAINFALL_ONLY_KEYWORDS) and not is_current_precip
+
+    has_weather = weather_hit or is_current_precip
+    has_rainfall_only = rainfall_hit and not has_weather
+    return has_weather, has_rainfall_only
+
+
+def fetch_weather_sync(district_name: str) -> Optional[dict]:
+    """Synchronous wrapper: call WeatherService from inside a sync FastAPI handler."""
+    svc = _get_weather_service()
+    try:
+        loop = asyncio.new_event_loop()
+        result = loop.run_until_complete(svc.get_weather_by_district_name(district_name))
+        loop.close()
+        return result
+    except Exception:
+        return None
+
+
+def format_weather_response(weather: dict, district_name: str) -> str:
+    """Format Open-Meteo payload into a clean markdown response."""
+    cur = weather.get("current", {})
+    forecast = weather.get("forecast", [])
+    location = weather.get("location", district_name)
+
+    temp = cur.get("temperature")
+    feels = cur.get("feels_like")
+    humidity = cur.get("humidity")
+    precip = cur.get("precipitation")
+    wind = cur.get("wind_speed")
+    desc = cur.get("description", "—")
+
+    temp_str    = f"{temp:.1f} °C"   if temp    is not None else "—"
+    feels_str   = f"{feels:.1f} °C"  if feels   is not None else "—"
+    humidity_str= f"{humidity} %"    if humidity is not None else "—"
+    precip_str  = f"{precip} mm"     if precip  is not None else "—"
+    wind_str    = f"{wind:.1f} km/h" if wind    is not None else "—"
+
+    lines = [
+        f"### Current Weather — {location}",
+        "",
+        "| Parameter | Value |",
+        "|---|---:|",
+        f"| Temperature | {temp_str} |",
+        f"| Feels Like | {feels_str} |",
+        f"| Humidity | {humidity_str} |",
+        f"| Precipitation | {precip_str} |",
+        f"| Wind Speed | {wind_str} |",
+        f"| Condition | {desc} |",
+        "",
+    ]
+
+    if forecast:
+        lines += [
+            "### 3-Day Forecast",
+            "",
+            "| Date | Max °C | Min °C | Precipitation | Probability | Condition |",
+            "|---|---:|---:|---:|---:|---|",
+        ]
+        for day in forecast:
+            date  = day.get("date", "—")
+            tmax  = f"{day['temp_max']:.1f}"  if day.get("temp_max")  is not None else "—"
+            tmin  = f"{day['temp_min']:.1f}"  if day.get("temp_min")  is not None else "—"
+            dp    = f"{day['precipitation_sum']} mm" if day.get("precipitation_sum") is not None else "—"
+            prob  = f"{day['precipitation_probability']}%" if day.get("precipitation_probability") is not None else "—"
+            cond  = day.get("description", "—")
+            lines.append(f"| {date} | {tmax} | {tmin} | {dp} | {prob} | {cond} |")
+        lines.append("")
+
+    lines.append("**Weather Source:** Open-Meteo (openmeteo.com) — live data")
+    return "\n".join(lines)
 
 router = APIRouter(prefix="/api/ai", tags=["AI Assistant"])
 
@@ -523,6 +647,11 @@ def is_unrelated_query(query: str) -> bool:
     greetings = {"hi", "hello", "hey", "good morning", "good afternoon", "good evening", "help", "greet", "greetings"}
     if query_lower in greetings or any(query_lower.startswith(g + " ") for g in greetings):
         return False
+
+    # Weather queries are in-scope
+    has_weather, _ = detect_weather_intent(query_lower)
+    if has_weather:
+        return False
         
     # Domain keywords to confirm standard groundwater queries
     groundwater_keywords = {
@@ -541,6 +670,201 @@ def is_unrelated_query(query: str) -> bool:
         return False
         
     return True
+
+
+# ---------------------------------------------------------------------------
+# National Ranking Handler
+# ---------------------------------------------------------------------------
+_RANKING_METRIC_MAP = {
+    # Depth to water level: "highest level" = shallowest = ASC; "lowest level" = deepest = DESC
+    "depth_asc":  ("depth_to_water_level_m_bgl",  "Depth to Water Level (m bgl)",  "Shallowest (Highest Groundwater Level)"),
+    "depth_desc": ("depth_to_water_level_m_bgl",  "Depth to Water Level (m bgl)",  "Deepest (Lowest Groundwater Level)"),
+    "recharge_desc":   ("annual_groundwater_recharge_ham",   "Annual Recharge (ham)",   "Highest Recharge"),
+    "recharge_asc":    ("annual_groundwater_recharge_ham",   "Annual Recharge (ham)",   "Lowest Recharge"),
+    "extraction_desc": ("annual_groundwater_extraction_ham", "Annual Extraction (ham)", "Highest Extraction"),
+    "extraction_asc":  ("annual_groundwater_extraction_ham", "Annual Extraction (ham)", "Lowest Extraction"),
+    "stage_desc":      ("stage_of_groundwater_extraction_percent", "Stage of Extraction (%)", "Highest Stage"),
+    "stage_asc":       ("stage_of_groundwater_extraction_percent", "Stage of Extraction (%)", "Lowest Stage"),
+    "rainfall_desc":   ("rainfall_mm",  "Annual Rainfall (mm)",  "Highest Rainfall"),
+    "rainfall_asc":    ("rainfall_mm",  "Annual Rainfall (mm)",  "Lowest Rainfall"),
+}
+
+def resolve_national_ranking(db: Session, query_lower: str) -> Optional[str]:
+    """
+    Detect and resolve a national ranking query such as:
+      'Which district has the highest groundwater level?'
+      'Which district has the most recharge?'
+      'Top districts with lowest extraction'
+    Returns a formatted markdown string, or None if not a ranking query.
+    """
+    is_rank = any(x in query_lower for x in [
+        "highest", "lowest", "most", "least", "top", "best", "worst",
+        "maximum", "minimum", "which district has", "which districts have"
+    ])
+    if not is_rank:
+        return None
+
+    # Determine direction
+    wants_high = any(x in query_lower for x in ["highest", "most", "maximum", "top", "best"])
+    wants_low  = any(x in query_lower for x in ["lowest", "least", "minimum", "worst"])
+    # Default to high if ambiguous
+    direction = "desc" if wants_high or not wants_low else "asc"
+
+    # Determine metric
+    if any(x in query_lower for x in ["level", "depth", "water table", "water level"]):
+        # For groundwater level: "highest level" = shallowest depth = ASC order
+        metric_key = "depth_asc" if wants_high else "depth_desc"
+    elif any(x in query_lower for x in ["recharge", "replenish"]):
+        metric_key = f"recharge_{direction}"
+    elif any(x in query_lower for x in ["stage"]):
+        metric_key = f"stage_{direction}"
+    elif any(x in query_lower for x in ["extraction", "draft", "withdraw"]):
+        metric_key = f"extraction_{direction}"
+    elif any(x in query_lower for x in ["rainfall", "rain", "precipitation"]):
+        metric_key = f"rainfall_{direction}"
+    else:
+        # Fallback: groundwater level
+        metric_key = "depth_asc" if wants_high else "depth_desc"
+
+    col_name, col_label, rank_label = _RANKING_METRIC_MAP[metric_key]
+    order_dir = "asc" if metric_key.endswith("_asc") else "desc"
+
+    # State filter?
+    state_filter = None
+    states_in_db = [s[0] for s in db.query(Geography.state_name).distinct().all()]
+    for s in states_in_db:
+        if s.lower() in query_lower:
+            state_filter = s
+            break
+
+    # How many results?
+    n_match = re.search(r'\btop\s*(\d+)\b', query_lower)
+    n = int(n_match.group(1)) if n_match else 10
+    n = min(n, 50)
+
+    # Build query joining Geography → GroundwaterObservation for depth,
+    # Geography for rainfall, or GWRAAssessment for volumetric metrics
+    from app.models import GroundwaterObservation, GWRAAssessment, RainfallRecord
+    from sqlalchemy import desc as sa_desc, asc as sa_asc
+
+    results = []
+
+    if col_name in ("depth_to_water_level_m_bgl",):
+        q = (
+            db.query(
+                Geography.district_name,
+                Geography.state_name,
+                GroundwaterObservation.depth_to_water_level_m_bgl,
+            )
+            .join(GroundwaterObservation, GroundwaterObservation.geography_id == Geography.id)
+            .filter(
+                Geography.normalized_mandal_name == None,
+                Geography.normalized_village_name == None,
+                GroundwaterObservation.depth_to_water_level_m_bgl != None,
+            )
+        )
+        if state_filter:
+            q = q.filter(Geography.state_name == state_filter)
+        if order_dir == "asc":
+            q = q.order_by(sa_asc(GroundwaterObservation.depth_to_water_level_m_bgl))
+        else:
+            q = q.order_by(sa_desc(GroundwaterObservation.depth_to_water_level_m_bgl))
+        rows = q.limit(n).all()
+        results = [(r.district_name, r.state_name, r.depth_to_water_level_m_bgl) for r in rows]
+
+    elif col_name == "rainfall_mm":
+        from sqlalchemy import func
+        q = (
+            db.query(
+                Geography.district_name,
+                Geography.state_name,
+                func.avg(RainfallRecord.rainfall_mm).label("avg_rainfall"),
+            )
+            .join(RainfallRecord, RainfallRecord.geography_id == Geography.id)
+            .filter(
+                Geography.district_name != None,
+                RainfallRecord.rainfall_mm != None,
+            )
+            .group_by(
+                Geography.normalized_district_name,
+                Geography.normalized_state_name,
+                Geography.district_name,
+                Geography.state_name,
+            )
+        )
+        if state_filter:
+            q = q.filter(Geography.state_name == state_filter)
+        if order_dir == "desc":
+            q = q.order_by(sa_desc("avg_rainfall"))
+        else:
+            q = q.order_by(sa_asc("avg_rainfall"))
+        rows = q.limit(n).all()
+        results = [(r.district_name, r.state_name, r.avg_rainfall) for r in rows]
+
+    else:
+        # GWRAAssessment metrics
+        col_attr = getattr(GWRAAssessment, col_name, None)
+        if col_attr is None:
+            return None
+        q = (
+            db.query(
+                Geography.district_name,
+                Geography.state_name,
+                col_attr,
+            )
+            .join(GWRAAssessment, GWRAAssessment.geography_id == Geography.id)
+            .filter(
+                Geography.normalized_mandal_name == None,
+                Geography.normalized_village_name == None,
+                col_attr != None,
+            )
+        )
+        if state_filter:
+            q = q.filter(Geography.state_name == state_filter)
+        if order_dir == "desc":
+            q = q.order_by(sa_desc(col_attr))
+        else:
+            q = q.order_by(sa_asc(col_attr))
+        rows = q.limit(n).all()
+        results = [(r[0], r[1], r[2]) for r in rows]
+
+    if not results:
+        return None
+
+    # Format response
+    scope = f" in {state_filter}" if state_filter else " across India"
+    header = (
+        f"### Top {len(results)} Districts — {rank_label}{scope}\n\n"
+        f"| # | District | State | {col_label} |\n"
+        f"|---|---|---|---:|\n"
+    )
+    rows_str = ""
+    for i, (dist, state, val) in enumerate(results, 1):
+        if col_name == "depth_to_water_level_m_bgl":
+            val_str = f"{val:.2f} m bgl"
+        elif col_name in ("annual_groundwater_recharge_ham", "annual_groundwater_extraction_ham"):
+            val_str = f"{val:,.2f} ham"
+        elif col_name == "stage_of_groundwater_extraction_percent":
+            val_str = f"{val:.2f}%"
+        elif col_name == "rainfall_mm":
+            val_str = f"{val:.1f} mm"
+        else:
+            val_str = str(val)
+        rows_str += f"| {i} | {dist} | {state} | {val_str} |\n"
+
+    note = ""
+    if col_name == "depth_to_water_level_m_bgl" and wants_high:
+        note = (
+            "\n> **Note:** A lower depth value (m bgl) means groundwater is closer to the surface, "
+            "i.e., a **higher** groundwater level. Districts at the top of this list have the "
+            "shallowest water table — the highest groundwater level.\n"
+        )
+
+    return (
+        header + rows_str
+        + note
+        + f"\n**Source:** IN-GRES Groundwater Dataset (CGWB / IMD)\n"
+    )
 
 @router.post("/chat", response_model=ChatResponse)
 def chat_with_assistant(
@@ -574,6 +898,7 @@ def chat_with_assistant(
         db.add(asst_msg)
         db.commit()
         
+        save_query_history(db, current_user.id, query_text, response_text, None)
         return {
             "query": query_text,
             "response": response_text,
@@ -661,14 +986,28 @@ def chat_with_assistant(
     else:
         is_rec_query = any(x in query_lower for x in ["improve", "increase", "conserve", "save", "depletion", "suggestion", "suggestions", "recommend", "recommendation", "recommendations", "prevent", "practice", "practices", "method", "methods", "tip", "tips", "manage", "management", "how to", "how can", "what should", "what can"])
         is_trend_query = any(x in query_lower for x in ["trend", "trends", "decline", "declined", "declining", "over the years", "over time", "change", "changes", "history", "historical", "chronological", "years", "2020", "2021", "2022", "2023", "2024", "2025", "2026"])
-        
-        if is_rec_query:
+
+        # --- Weather intent detection (takes priority over plain rainfall check) ---
+        _has_weather, _has_rainfall_only = detect_weather_intent(query_lower)
+        # National ranking: 'which district has highest/lowest X?' — check FIRST before all metric intents
+        _is_rank_signal = any(x in query_lower for x in [
+            "highest", "lowest", "most", "least", "which district has", "which districts have",
+            "maximum", "minimum", "top districts", "bottom districts"
+        ])
+        _has_rank_metric = any(x in query_lower for x in [
+            "level", "depth", "recharge", "extraction", "stage", "rainfall", "rain"
+        ])
+        if _is_rank_signal and _has_rank_metric and not _has_weather:
+            detected_intent = "NATIONAL_RANKING"
+        elif _has_weather:
+            detected_intent = "WEATHER"
+        elif is_rec_query:
             detected_intent = "RECOMMENDATION"
         elif is_trend_query:
             detected_intent = "TREND"
         elif any(x in query_lower for x in ["level", "depth", "water table"]):
             detected_intent = "GROUNDWATER_LEVEL"
-        elif any(x in query_lower for x in ["rainfall", "rain", "precipitation"]):
+        elif _has_rainfall_only or any(x in query_lower for x in ["rainfall", "rain"]):
             detected_intent = "RAINFALL"
         elif any(x in query_lower for x in ["recharge", "replenish"]):
             detected_intent = "RECHARGE"
@@ -680,7 +1019,7 @@ def chat_with_assistant(
             detected_intent = "ASSESSMENT_CATEGORY"
         elif any(x in query_lower for x in ["availability", "available", "surplus"]):
             detected_intent = "NET_GROUNDWATER_AVAILABILITY"
-            
+
     is_compare_requested = any(x in query_lower for x in ["compare", "vs", "versus", "difference", "which is higher", "which is lower"])
     if is_compare_requested:
         detected_intent = "COMPARISON"
@@ -759,6 +1098,7 @@ def chat_with_assistant(
             for g in matched_geos:
                 response_text += f"- {g.district_name}, {g.state_name}\n"
                 
+            save_query_history(db, current_user.id, query_text, response_text, None)
             return {
                 "query": query_text,
                 "response": response_text,
@@ -824,6 +1164,7 @@ def chat_with_assistant(
         db.add(asst_msg)
         db.commit()
         
+        save_query_history(db, current_user.id, query_text, response_text, None)
         return {
             "query": query_text,
             "response": response_text,
@@ -842,6 +1183,33 @@ def chat_with_assistant(
                 "intent_resolved": True
             }
         }
+
+    # -----------------------------------------------------------------------
+    # NATIONAL RANKING PATH: 'which district has the highest/lowest X?'
+    # -----------------------------------------------------------------------
+    active_intent_pre = detected_intent or conv.current_intent
+    if active_intent_pre == "NATIONAL_RANKING":
+        ranking_response = resolve_national_ranking(db, query_lower)
+        if ranking_response:
+            asst_msg = ConversationMessage(conversation_id=conv_id, sender="assistant", text=ranking_response)
+            db.add(asst_msg)
+            db.commit()
+            save_query_history(db, current_user.id, query_text, ranking_response, None)
+            return {
+                "query": query_text,
+                "response": ranking_response,
+                "conversation_id": conv_id,
+                "location": None,
+                "assessment": None,
+                "groundwater": None,
+                "rainfall": None,
+                "resources": None,
+                "sources": ["IN-GRES Groundwater Dataset"],
+                "conversation_context": {
+                    "location_resolved": False,
+                    "intent_resolved": True
+                }
+            }
 
     is_future_recharge = "recharge" in query_lower and any(x in query_lower for x in ["future", "predict", "forecast", "next", "2027", "2028", "2029"])
     if is_future_recharge:
@@ -965,6 +1333,7 @@ def chat_with_assistant(
         db.add(asst_msg)
         db.commit()
         
+        save_query_history(db, current_user.id, query_text, response_text, district_id_val)
         return {
             "query": query_text,
             "response": response_text,
@@ -987,6 +1356,82 @@ def chat_with_assistant(
             "assessment_category": assessment_schema.category if assessment_schema else None
         }
 
+    # Re-evaluate weather intent from active intent (may have been carried from context)
+    active_intent = detected_intent or conv.current_intent
+    _has_weather_active, _ = detect_weather_intent(query_lower)
+    is_weather_query = active_intent == "WEATHER" or _has_weather_active
+    # A combined query wants both groundwater AND weather
+    is_combined_query = is_weather_query and any(x in query_lower for x in [
+        "groundwater", "water level", "depth", "recharge", "extraction", "stage",
+        "rainfall", "rain", "status", "assessment", "category"
+    ])
+    # Pure weather = weather intent with no groundwater keywords
+    is_pure_weather = is_weather_query and not is_combined_query
+
+    # -----------------------------------------------------------------------
+    # WEATHER PATH: call Open-Meteo for any weather intent
+    # -----------------------------------------------------------------------
+    weather_response_part = ""
+    if is_weather_query and len(matched_geos) >= 1:
+        geo_for_weather = matched_geos[0]
+        print(f"[INGRES-AI] Weather intent detected. Fetching weather for '{geo_for_weather.district_name}'.")
+        weather_data = fetch_weather_sync(geo_for_weather.district_name)
+        if weather_data:
+            weather_response_part = format_weather_response(weather_data, geo_for_weather.district_name)
+            print(f"[INGRES-AI] Weather fetch SUCCESS for '{geo_for_weather.district_name}'.")
+        else:
+            weather_response_part = (
+                f"### Current Weather — {geo_for_weather.district_name}\n\n"
+                "Live weather information is temporarily unavailable. "
+                "Please try again in a moment.\n\n"
+                "**Weather Source:** Open-Meteo"
+            )
+            print(f"[INGRES-AI] Weather fetch FAILED for '{geo_for_weather.district_name}'.")
+    elif is_weather_query and not matched_geos:
+        weather_response_part = (
+            "I could not resolve a specific Indian district from your query. "
+            "Please mention a district or city name (e.g. 'Guntur', 'YSR Kadapa') to get live weather."
+        )
+
+    # -----------------------------------------------------------------------
+    # PURE WEATHER — return only weather, no groundwater data
+    # -----------------------------------------------------------------------
+    if is_pure_weather:
+        response_text = weather_response_part
+
+        asst_msg = ConversationMessage(conversation_id=conv_id, sender="assistant", text=response_text)
+        db.add(asst_msg)
+        db.commit()
+
+        save_query_history(db, current_user.id, query_text, response_text, matched_geos[0].id if matched_geos else None)
+        payload = {
+            "query": query_text,
+            "response": response_text,
+            "conversation_id": conv_id,
+            "location": LocationSchema(
+                country="India",
+                state=matched_geos[0].state_name if matched_geos else None,
+                district=matched_geos[0].district_name if matched_geos else None,
+            ) if matched_geos else None,
+            "assessment": None,
+            "groundwater": None,
+            "rainfall": None,
+            "resources": None,
+            "sources": ["Open-Meteo"],
+            "conversation_context": {
+                "location_resolved": bool(matched_geos),
+                "intent_resolved": True,
+            },
+        }
+        if matched_geos:
+            payload["district_id"]   = matched_geos[0].id
+            payload["district_name"] = matched_geos[0].district_name
+            payload["state_name"]    = matched_geos[0].state_name
+        return payload
+
+    # -----------------------------------------------------------------------
+    # GROUNDWATER / COMBINED PATH
+    # -----------------------------------------------------------------------
     # If we have a resolved geography context
     if len(matched_geos) >= 1 and not is_compare_requested:
         geo = matched_geos[0]
@@ -1031,19 +1476,24 @@ def chat_with_assistant(
         
         # Recommendations and trend queries should not bypass to factual metrics table
         if conv.current_intent in ["RECOMMENDATION", "TREND"]:
-            verified_data = {
-                "district": details
-            }
+            verified_data = {"district": details}
             response_text = GeminiService.generate_chat_response(query_text, verified_data)
         elif is_simple or not settings.GEMINI_API_KEY:
             # Gemini Bypass: Return database results directly!
             response_text = generate_factual_response(details)
         else:
             # Enhance with Gemini (for reasoning/general chats)
-            verified_data = {
-                "district": details
-            }
+            verified_data = {"district": details}
             response_text = GeminiService.generate_chat_response(query_text, verified_data)
+
+        # COMBINED QUERY: append weather section after groundwater section
+        if is_combined_query and weather_response_part:
+            response_text = (
+                response_text
+                + "\n\n---\n\n"
+                + weather_response_part
+            )
+            sources.append("Open-Meteo")
             
     # Comparison case
     elif len(matched_geos) >= 2 and is_compare_requested:
@@ -1066,18 +1516,26 @@ def chat_with_assistant(
                 }
             }
         }
-        
         response_text = GeminiService.generate_chat_response(query_text, verified_data)
+
+        # Append weather for comparison if requested
+        if is_weather_query and weather_response_part:
+            response_text += "\n\n---\n\n" + weather_response_part
         
     else:
         # General query or unresolved location query
-        verified_data = {"general_query": True}
-        response_text = GeminiService.generate_chat_response(query_text, verified_data)
+        if is_weather_query and weather_response_part:
+            response_text = weather_response_part
+        else:
+            verified_data = {"general_query": True}
+            response_text = GeminiService.generate_chat_response(query_text, verified_data)
         
     # Log assistant message
     asst_msg = ConversationMessage(conversation_id=conv_id, sender="assistant", text=response_text)
     db.add(asst_msg)
     db.commit()
+    
+    save_query_history(db, current_user.id, query_text, response_text, matched_geos[0].id if len(matched_geos) >= 1 else None)
     
     # Build final response payload
     res_payload = {
