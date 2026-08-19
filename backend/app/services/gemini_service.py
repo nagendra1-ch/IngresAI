@@ -28,13 +28,16 @@ class GeminiService:
                 "Analyze the query and identify: intent, district name, state name, district name 2 (if comparison), state name 2 (if comparison), and is_comparison_requested.\n"
                 "Return strictly a raw JSON object with no markdown styling, no backticks, containing exactly these keys:\n"
                 "{\n"
-                "  \"intent\": \"GROUNDWATER_LEVEL\" | \"GROUNDWATER_RESOURCE\" | \"RAINFALL\" | \"RECHARGE\" | \"EXTRACTION\" | \"STAGE_OF_EXTRACTION\" | \"ASSESSMENT_CATEGORY\" | \"NET_GROUNDWATER_AVAILABILITY\" | \"DISTRICT_STATUS\" | \"COMPARISON\" | \"HISTORICAL_TREND\" | \"GENERAL_GROUNDWATER\" | \"UNRELATED\",\n"
+                "  \"intent\": \"GROUNDWATER_LEVEL\" | \"GROUNDWATER_RESOURCE\" | \"RAINFALL\" | \"RECHARGE\" | \"EXTRACTION\" | \"STAGE_OF_EXTRACTION\" | \"ASSESSMENT_CATEGORY\" | \"NET_GROUNDWATER_AVAILABILITY\" | \"DISTRICT_STATUS\" | \"COMPARISON\" | \"HISTORICAL_TREND\" | \"GENERAL_GROUNDWATER\" | \"WEATHER\" | \"UNRELATED\",\n"
                 "  \"location_district\": string or null,\n"
                 "  \"location_state\": string or null,\n"
                 "  \"location_district_2\": string or null,\n"
                 "  \"location_state_2\": string or null,\n"
                 "  \"is_comparison_requested\": boolean\n"
                 "}\n\n"
+                "Use WEATHER intent when the query asks about current or forecasted atmospheric conditions "
+                "(temperature, humidity, wind speed, weather condition, rain forecast, feels like, etc.). "
+                "Use RAINFALL only when the query asks about historical/official recorded rainfall data.\n\n"
                 f"Query: \"{query}\""
             )
             
@@ -85,7 +88,10 @@ class GeminiService:
                 "      ### Monitoring\n"
                 "      (suggest monitoring groundwater levels and rainfall over time)\n"
                 "   b. If the question is general or location-specific data is unavailable, provide general practical suggestions (such as rainwater harvesting, check dams, recharge wells, drip irrigation, crop selection) and explicitly state that the recommendations are general.\n"
-                "10. If the query is unrelated to groundwater, water, rainfall, recharge, extraction, conservation, etc., respond with exactly: 'This question is outside the scope of IN-GRES AI. I can help with groundwater levels, groundwater resources, rainfall, recharge, extraction, GWRA assessments, groundwater conservation, and related topics.'\n"
+                "10. Weather questions (current weather, temperature, humidity, wind speed, forecast, etc.) are IN-SCOPE. "
+                "If the user asks about current or forecasted weather for an Indian district, acknowledge that live weather data is fetched from Open-Meteo and guide them to specify a district name (e.g. 'What is the weather in Guntur?'). "
+                "If the query is completely unrelated to groundwater, water, rainfall, weather, recharge, extraction, or conservation, respond with exactly: "
+                "'This question is outside the scope of IN-GRES AI. I can help with groundwater levels, groundwater resources, rainfall, recharge, extraction, GWRA assessments, groundwater conservation, current weather conditions, and related topics.'\n"
                 "11. DO NOT return the current GWRA recharge value as a future prediction/forecast. If the user asks for future predictions, next year's recharge, or 2 years recharge forecast, explicitly state: 'Future groundwater recharge cannot be reliably predicted from the current GWRA dataset alone. The available [recharge_value] ham is the assessed annual recharge value, not a two-year forecast.' If a forecasting model is requested or implemented, label it 'AI/Model Forecast' and never 'Official CGWB Forecast'.\n"
                 "12. Every numerical value must carry its own temporal metadata. GWRA Assessment Year (e.g. 2025) and Groundwater Observation Year (e.g. 2026) are different and must be displayed separately."
             )
@@ -155,13 +161,19 @@ class GeminiService:
                 "watershed", "drip", "sprinkler", "ambedkar", "konaseema", "ysr", "kadapa", "guntur", "ananthapuramu",
                 "kurnool", "theni", "nilgiris"
             }
+            # Weather keywords are also in-scope for IN-GRES AI
+            weather_keywords = {
+                "weather", "temperature", "humidity", "forecast", "raining", "wind", "windspeed",
+                "sunny", "cloudy", "storm", "thunderstorm", "drizzle", "heatwave", "haze",
+                "feels", "apparent", "condition", "hot", "cold", "cool", "warm", "climate"
+            }
             import re
             words = re.findall(r'[a-z0-9]+', query_lower)
-            if any(w in groundwater_keywords for w in words):
+            if any(w in groundwater_keywords for w in words) or any(w in weather_keywords for w in words):
                 is_unrelated = False
                 
         if is_unrelated:
-            return "This question is outside the scope of IN-GRES AI. I can help with groundwater levels, groundwater resources, rainfall, recharge, extraction, GWRA assessments, groundwater conservation, and related topics."
+            return "This question is outside the scope of IN-GRES AI. I can help with groundwater levels, groundwater resources, rainfall, recharge, extraction, GWRA assessments, groundwater conservation, current weather conditions, and related topics."
 
         # Check if recommendations/suggestions are requested
         is_recommendation = any(x in query_lower for x in ["improve", "increase", "conserve", "save", "depletion", "suggestion", "suggestions", "recommend", "recommendation", "recommendations", "prevent", "practice", "practices", "method", "methods", "tip", "tips", "manage", "management", "how to", "how can", "what should", "what can"])

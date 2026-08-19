@@ -2,7 +2,7 @@ import requests
 import json
 import sys
 
-base_url = "http://127.0.0.1:8085"
+base_url = "http://127.0.0.1:8000"
 
 def run_tests():
     print("Testing registration and login flow...")

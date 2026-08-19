@@ -105,14 +105,8 @@ const Login = () => {
             Register here
           </Link>
         </div>
-        
-        <div style={{ marginTop: '25px', borderTop: '1px solid var(--border-color)', paddingTop: '15px', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-          <p style={{ fontWeight: 600, marginBottom: '4px' }}>Demo Accounts Available:</p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-            <span>👤 User: <strong>user@ingres.gov.in</strong> / <strong>userpassword</strong></span>
-            <span>🛡️ Admin: <strong>admin@ingres.gov.in</strong> / <strong>adminpassword</strong></span>
-          </div>
-        </div>
+
+
       </div>
     </div>
   );

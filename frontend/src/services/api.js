@@ -1,7 +1,7 @@
 import axios from 'axios';
 
-// Connect to FastAPI server running on port 8085 in dev, or use relative URLs in production
-const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://127.0.0.1:8085' : '');
+// Connect to FastAPI server running on port 8000 in dev, or use relative URLs in production
+const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '');
 
 
 const api = axios.create({

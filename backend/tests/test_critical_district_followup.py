@@ -1,7 +1,7 @@
 import requests
 import sys
 
-base_url = "http://127.0.0.1:8085"
+base_url = "http://127.0.0.1:8000"
 
 def run_followup_tests():
     print("Testing critical district follow-up flow...")

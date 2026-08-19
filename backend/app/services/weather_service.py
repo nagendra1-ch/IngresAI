@@ -43,66 +43,179 @@ WMO_DESCRIPTIONS: dict[int, str] = {
 
 
 # ---------------------------------------------------------------------------
-# District name → geocodable alias map
-# Government-renamed or unusual district names that Open-Meteo geocoding
-# cannot resolve are mapped to their well-known city/town equivalents.
+# Hardcoded district coordinates — bypasses geocoding API entirely.
+# (lat, lon, display_name)
+# This ensures weather always works even when the geocoding API is unreachable.
 # ---------------------------------------------------------------------------
-DISTRICT_GEOCODE_MAP: dict[str, str] = {
-    # Andhra Pradesh
-    "ysr kadapa": "Kadapa",
-    "kadapa": "Kadapa",
-    "dr. b.r. ambedkar konaseema": "Amalapuram",
-    "konaseema": "Amalapuram",
-    "dr b r ambedkar konaseema": "Amalapuram",
-    "eluru": "Eluru",
-    "sri sathya sai": "Puttaparthi",
-    "ntr": "Vijayawada",
-    "bapatla": "Bapatla",
-    "palnadu": "Narasaraopet",
-    "alluri sitharama raju": "Paderu",
-    "anakapalli": "Anakapalle",
-    "kakinada": "Kakinada",
-    "ananthapuramu": "Anantapur",
-    # Telangana
-    "jayashankar bhupalpally": "Bhupalpally",
-    "kumuram bheem asifabad": "Asifabad",
-    "mulugu": "Mulugu",
-    "narayanpet": "Narayanpet",
-    "vikarabad": "Vikarabad",
-    # Tamil Nadu
-    "chengalpattu": "Chengalpattu",
-    "ranipet": "Ranipet",
-    "tirupathur": "Tirupathur",
-    "tenkasi": "Tenkasi",
-    # General pattern: strip "Dr." / "YSR" / "Sri" prefix
+DISTRICT_COORDS: dict[str, tuple[float, float, str]] = {
+    # ── Andhra Pradesh ──────────────────────────────────────────────────────
+    "srikakulam": (18.2949, 83.8938, "Srikakulam"),
+    "vizianagaram": (18.1066, 83.3956, "Vizianagaram"),
+    "visakhapatnam": (17.6868, 83.2185, "Visakhapatnam"),
+    "anakapalli": (17.6910, 82.9985, "Anakapalle"),
+    "anakapalle": (17.6910, 82.9985, "Anakapalle"),
+    "alluri sitharama raju": (18.0800, 82.8500, "Paderu"),
+    "kakinada": (16.9891, 82.2475, "Kakinada"),
+    "dr. b.r. ambedkar konaseema": (16.9800, 82.0000, "Amalapuram"),
+    "dr b r ambedkar konaseema": (16.9800, 82.0000, "Amalapuram"),
+    "konaseema": (16.9800, 82.0000, "Amalapuram"),
+    "amalapuram": (16.5789, 82.0003, "Amalapuram"),
+    "east godavari": (17.3273, 81.8314, "Rajamahendravaram"),
+    "eluru": (16.7107, 81.0952, "Eluru"),
+    "west godavari": (16.9174, 81.3340, "Bhimavaram"),
+    "ntr": (16.5062, 80.6480, "Vijayawada"),
+    "krishna": (16.5062, 80.6480, "Vijayawada"),
+    "vijayawada": (16.5062, 80.6480, "Vijayawada"),
+    "guntur": (16.3067, 80.4365, "Guntur"),
+    "bapatla": (15.9053, 80.4674, "Bapatla"),
+    "palnadu": (16.4307, 79.6480, "Narasaraopet"),
+    "prakasam": (15.3400, 79.5700, "Ongole"),
+    "sri potti sriramulu nellore": (14.4426, 79.9865, "Nellore"),
+    "nellore": (14.4426, 79.9865, "Nellore"),
+    "kurnool": (15.8281, 78.0373, "Kurnool"),
+    "nandyal": (15.4780, 78.4830, "Nandyal"),
+    "ananthapuramu": (14.6819, 77.6006, "Anantapur"),
+    "anantapur": (14.6819, 77.6006, "Anantapur"),
+    "sri sathya sai": (14.1676, 77.8169, "Puttaparthi"),
+    "puttaparthi": (14.1676, 77.8169, "Puttaparthi"),
+    "kadapa": (14.4673, 78.8242, "Kadapa"),
+    "ysr kadapa": (14.4673, 78.8242, "Kadapa"),
+    "chittoor": (13.2172, 79.1003, "Chittoor"),
+    "tirupati": (13.6288, 79.4192, "Tirupati"),
+    # ── Telangana ───────────────────────────────────────────────────────────
+    "hyderabad": (17.3850, 78.4867, "Hyderabad"),
+    "rangareddy": (17.2403, 78.3560, "Rangareddy"),
+    "medchal malkajgiri": (17.5545, 78.5380, "Medchal"),
+    "sangareddy": (17.6193, 78.0860, "Sangareddy"),
+    "medak": (18.0500, 78.2600, "Medak"),
+    "siddipet": (18.1020, 78.8521, "Siddipet"),
+    "nizamabad": (18.6726, 78.0940, "Nizamabad"),
+    "nirmal": (19.0973, 78.3430, "Nirmal"),
+    "adilabad": (19.6641, 78.5320, "Adilabad"),
+    "kumuram bheem asifabad": (19.3670, 79.2880, "Asifabad"),
+    "mancherial": (18.8719, 79.4600, "Mancherial"),
+    "peddapalli": (18.6140, 79.3730, "Peddapalli"),
+    "jayashankar bhupalpally": (18.4385, 79.9060, "Bhupalpally"),
+    "mulugu": (18.1920, 80.0630, "Mulugu"),
+    "bhadradri kothagudem": (17.5550, 80.6190, "Kothagudem"),
+    "khammam": (17.2473, 80.1514, "Khammam"),
+    "mahabubabad": (17.5988, 80.0030, "Mahabubabad"),
+    "warangal": (17.9784, 79.5941, "Warangal"),
+    "hanamkonda": (17.9784, 79.5941, "Hanamkonda"),
+    "jangaon": (17.7275, 79.1520, "Jangaon"),
+    "yadadri bhuvanagiri": (17.5833, 78.8833, "Bhongir"),
+    "suryapet": (17.1416, 79.6206, "Suryapet"),
+    "nalgonda": (17.0576, 79.2671, "Nalgonda"),
+    "narayanpet": (16.7430, 77.4960, "Narayanpet"),
+    "mahbubnagar": (16.7376, 77.9826, "Mahbubnagar"),
+    "wanaparthy": (16.3630, 78.0600, "Wanaparthy"),
+    "gadwal": (16.2290, 77.8040, "Gadwal"),
+    "jogulamba gadwal": (16.2290, 77.8040, "Gadwal"),
+    "vikarabad": (17.3330, 77.9040, "Vikarabad"),
+    "karimnagar": (18.4386, 79.1288, "Karimnagar"),
+    "rajanna sircilla": (18.3870, 78.8120, "Sircilla"),
+    "kamareddy": (18.3197, 78.3427, "Kamareddy"),
+    "nagarkurnool": (16.4800, 78.3200, "Nagarkurnool"),
+    "nagar kurnool": (16.4800, 78.3200, "Nagarkurnool"),
+    # ── Tamil Nadu (common) ─────────────────────────────────────────────────
+    "chennai": (13.0827, 80.2707, "Chennai"),
+    "coimbatore": (11.0168, 76.9558, "Coimbatore"),
+    "madurai": (9.9252, 78.1198, "Madurai"),
+    "salem": (11.6643, 78.1460, "Salem"),
+    "tiruchirappalli": (10.7905, 78.7047, "Tiruchirappalli"),
+    "tirunelveli": (8.7139, 77.7567, "Tirunelveli"),
+    "vellore": (12.9165, 79.1325, "Vellore"),
+    "erode": (11.3410, 77.7172, "Erode"),
+    "tiruppur": (11.1085, 77.3411, "Tiruppur"),
+    "dindigul": (10.3673, 77.9803, "Dindigul"),
+    "thanjavur": (10.7867, 79.1378, "Thanjavur"),
+    "chengalpattu": (12.6922, 79.9760, "Chengalpattu"),
+    "ranipet": (12.9221, 79.3323, "Ranipet"),
+    "tirupathur": (12.4964, 78.5598, "Tirupathur"),
+    "tenkasi": (8.9594, 77.3152, "Tenkasi"),
+    "kanyakumari": (8.0883, 77.5385, "Kanyakumari"),
+    "villupuram": (11.9401, 79.4861, "Villupuram"),
+    "cuddalore": (11.7447, 79.7689, "Cuddalore"),
+    "nagapattinam": (10.7631, 79.8428, "Nagapattinam"),
+    "pudukkottai": (10.3833, 78.8001, "Pudukkottai"),
+    "ramanathapuram": (9.3762, 78.8308, "Ramanathapuram"),
+    "sivagangai": (9.8476, 78.4800, "Sivagangai"),
+    "theni": (10.0104, 77.4770, "Theni"),
+    "virudhunagar": (9.5851, 77.9624, "Virudhunagar"),
+    "krishnagiri": (12.5266, 78.2138, "Krishnagiri"),
+    "dharmapuri": (12.1275, 78.1580, "Dharmapuri"),
+    "the nilgiris": (11.4916, 76.7337, "Ooty"),
+    "namakkal": (11.2198, 78.1672, "Namakkal"),
+    "karur": (10.9601, 78.0766, "Karur"),
+    "ariyalur": (11.1408, 79.0787, "Ariyalur"),
+    "perambalur": (11.2335, 78.8736, "Perambalur"),
+    "tiruvarur": (10.7726, 79.6368, "Tiruvarur"),
+    "thoothukkudi": (8.7642, 78.1348, "Thoothukudi"),
+    "thoothukudi": (8.7642, 78.1348, "Thoothukudi"),
+    "kallakurichi": (11.7375, 78.9618, "Kallakurichi"),
+    "tenkasi": (8.9594, 77.3152, "Tenkasi"),
+    "tirupattur": (12.4964, 78.5598, "Tirupattur"),
+    "mayiladuthurai": (11.1014, 79.6527, "Mayiladuthurai"),
+    # ── Karnataka (common) ──────────────────────────────────────────────────
+    "bengaluru urban": (12.9716, 77.5946, "Bengaluru"),
+    "bangalore urban": (12.9716, 77.5946, "Bengaluru"),
+    "bangalore rural": (13.1986, 77.7066, "Bangalore Rural"),
+    "mysuru": (12.2958, 76.6394, "Mysuru"),
+    "tumkur": (13.3379, 77.1173, "Tumkur"),
+    "kolar": (13.1360, 78.1294, "Kolar"),
+    "ramanagara": (12.7186, 77.2830, "Ramanagara"),
+    "chikkaballapura": (13.4356, 77.7319, "Chikkaballapura"),
+    # ── Maharashtra (common) ────────────────────────────────────────────────
+    "pune": (18.5204, 73.8567, "Pune"),
+    "nashik": (19.9975, 73.7898, "Nashik"),
+    "aurangabad": (19.8762, 75.3433, "Aurangabad"),
+    "nagpur": (21.1458, 79.0882, "Nagpur"),
+    "amravati": (20.9374, 77.7796, "Amravati"),
 }
 
-def _normalize_district_for_geocoding(name: str) -> str:
-    """Return a geocodable name for *name*, using the alias map.
 
-    Strategy:
-    1. Check exact lowercase match in DISTRICT_GEOCODE_MAP.
-    2. Strip common administrative prefixes (YSR, Dr., Sri, etc.) and retry.
-    3. Fall back to the original name.
+def _lookup_district_coords(name: str) -> "Optional[tuple[float, float, str]]":
+    """Return hardcoded (lat, lon, display_name) for *name* if available.
+
+    Tries: exact lowercase match → strip honorific prefixes → partial match.
     """
-    key = name.lower().strip()
-    if key in DISTRICT_GEOCODE_MAP:
-        return DISTRICT_GEOCODE_MAP[key]
-
-    # Strip leading honorific/administrative tokens
     import re as _re
+    key = name.lower().strip()
+
+    if key in DISTRICT_COORDS:
+        return DISTRICT_COORDS[key]
+
+    # Strip common honorific / administrative prefixes
     stripped = _re.sub(
         r'^(ysr|dr\.?|sri|shri|babu|baba)\s+',
         '',
         key,
         flags=_re.IGNORECASE,
     ).strip()
-    if stripped in DISTRICT_GEOCODE_MAP:
-        return DISTRICT_GEOCODE_MAP[stripped]
-    if stripped and stripped != key:
-        return stripped.title()  # e.g. "kadapa"
+    if stripped in DISTRICT_COORDS:
+        return DISTRICT_COORDS[stripped]
 
-    return name  # original
+    # Partial / substring match (e.g. "b.r. ambedkar konaseema" → "konaseema")
+    for k, v in DISTRICT_COORDS.items():
+        if k in key or key in k:
+            return v
+
+    return None
+
+
+def _normalize_district_for_geocoding(name: str) -> str:
+    """Return a geocodable name for *name* (fallback when coords not found)."""
+    import re as _re
+    key = name.lower().strip()
+    stripped = _re.sub(
+        r'^(ysr|dr\.?|sri|shri|babu|baba)\s+',
+        '',
+        key,
+        flags=_re.IGNORECASE,
+    ).strip()
+    if stripped and stripped != key:
+        return stripped.title()
+    return name
 
 
 # ---------------------------------------------------------------------------
@@ -163,9 +276,8 @@ class WeatherService:
     async def get_extended_forecast_by_district_name(
         self, district_name: str
     ) -> Optional[dict]:
-        """Geocode *district_name* and return extended forecast for its coordinates."""
-        geocode_name = _normalize_district_for_geocoding(district_name)
-        coords = await self._geocode(geocode_name)
+        """Resolve *district_name* coordinates and return extended forecast."""
+        coords = await self._geocode(district_name)
         if coords is None:
             return None
         lat, lon, resolved_name = coords
@@ -181,22 +293,31 @@ class WeatherService:
     async def _geocode(
         self, name: str
     ) -> Optional[tuple[float, float, str]]:
-        """Return (lat, lon, display_name) for *name* using Open-Meteo geocoding."""
+        """Return (lat, lon, display_name) for *name*.
+
+        First checks the hardcoded DISTRICT_COORDS table (instant, no network).
+        Falls back to Open-Meteo geocoding API if not found.
+        """
+        # 1. Fast path: hardcoded coordinates
+        coords = _lookup_district_coords(name)
+        if coords is not None:
+            return coords
+
+        # 2. Slow path: geocoding API (may be blocked on some networks)
         params = {
-            "name": name,
+            "name": _normalize_district_for_geocoding(name),
             "count": 1,
             "language": "en",
             "format": "json",
-            "countryCode": "IN",   # restrict to India
+            "countryCode": "IN",
         }
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=8) as client:
                 resp = await client.get(OPEN_METEO_GEOCODING_URL, params=params)
                 resp.raise_for_status()
                 body = resp.json()
                 results = body.get("results")
                 if not results:
-                    # Retry without country filter
                     params.pop("countryCode", None)
                     resp = await client.get(OPEN_METEO_GEOCODING_URL, params=params)
                     resp.raise_for_status()

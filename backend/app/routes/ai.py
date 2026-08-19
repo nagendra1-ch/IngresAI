@@ -35,12 +35,19 @@ def save_query_history(db: Session, user_id: int, query: str, response: str, geo
 # Weather intent constants & helpers
 # ---------------------------------------------------------------------------
 WEATHER_KEYWORDS = {
+    # Core weather terms
     "weather", "temperature", "humidity", "forecast", "raining",
     "wind", "windspeed", "wind speed", "sunny", "cloudy",
     "storm", "thunderstorm", "drizzle", "heatwave", "haze",
     "feels like", "apparent temperature", "current weather",
     "today's weather", "tomorrow's weather", "weather condition",
     "weather forecast", "3-day", "3 day",
+    # Additional specific weather terms (no generic words to avoid false positives)
+    "fog", "foggy", "mist", "misty", "overcast", "uv index",
+    "dew point", "air quality", "aqi", "smog", "hail", "snow",
+    "weather api", "live weather", "real-time weather",
+    "heat index", "wind chill", "atmospheric pressure",
+    "visibility", "sky condition", "weather update",
 }
 # Rainfall / precipitation keywords that belong to the OFFICIAL dataset
 RAINFALL_ONLY_KEYWORDS = {"rainfall", "rain", "precipitation"}
@@ -357,6 +364,7 @@ def format_districts_list_response(agg_result: dict, count_only: bool = False) -
     header += f"**Assessment Year:** {y}\n"
     header += f"**Assessment Category:** {cat}\n\n"
     header += f"**Total districts containing at least one {cat} assessment unit:** {count}\n\n"
+    header += f"**Districts classified as {cat}:** {count}\n\n"
     
     if count_only:
         header += f"**Source:** GWRA {y} / CGWB\n"
@@ -518,8 +526,6 @@ def resolve_query_geographies(db: Session, query_text: str):
     
     # Filter using Authoritative Geography to prevent false ambiguities
     authoritative_map = {
-        "ananthapuramu": "Andhra Pradesh",
-        "anantapur": "Andhra Pradesh",
         "guntur": "Andhra Pradesh",
         "kurnool": "Andhra Pradesh",
         "ysr kadapa": "Andhra Pradesh",
@@ -624,7 +630,7 @@ def generate_factual_response(details: dict) -> str:
         f"| **Stage of Groundwater Extraction** | {b_stage_str} | GWRA Assessment Year: **{y}** |\n"
         f"| **Net Groundwater Availability for Future Use** | {b_net_avail_str} | GWRA Assessment Year: **{y}** |\n"
         f"| **District Assessment Category** | {b_category} | GWRA Assessment Year: **{y}** |\n\n"
-        f"### Rainfall\n\n"
+        f"### Annual Rainfall\n\n"
         f"**Rainfall: {rainfall_str}**\n\n"
         f"**Period:** {norm_rain_period}\n\n"
         f"> Do not label this value as **\"Annual {rain_year}\"** unless the source explicitly confirms that {rainfall_str} represents the complete calendar year {rain_year}.\n\n"
@@ -687,6 +693,8 @@ _RANKING_METRIC_MAP = {
     "stage_asc":       ("stage_of_groundwater_extraction_percent", "Stage of Extraction (%)", "Lowest Stage"),
     "rainfall_desc":   ("rainfall_mm",  "Annual Rainfall (mm)",  "Highest Rainfall"),
     "rainfall_asc":    ("rainfall_mm",  "Annual Rainfall (mm)",  "Lowest Rainfall"),
+    "availability_desc": ("net_groundwater_availability_ham", "Net Availability (ham)", "Highest Net Availability"),
+    "availability_asc":  ("net_groundwater_availability_ham", "Net Availability (ham)", "Lowest Net Availability"),
 }
 
 def resolve_national_ranking(db: Session, query_lower: str) -> Optional[str]:
@@ -699,14 +707,15 @@ def resolve_national_ranking(db: Session, query_lower: str) -> Optional[str]:
     """
     is_rank = any(x in query_lower for x in [
         "highest", "lowest", "most", "least", "top", "best", "worst",
-        "maximum", "minimum", "which district has", "which districts have"
+        "maximum", "minimum", "which district has", "which districts have",
+        "low", "high"
     ])
     if not is_rank:
         return None
 
     # Determine direction
-    wants_high = any(x in query_lower for x in ["highest", "most", "maximum", "top", "best"])
-    wants_low  = any(x in query_lower for x in ["lowest", "least", "minimum", "worst"])
+    wants_high = any(x in query_lower for x in ["highest", "most", "maximum", "top", "best", "high"])
+    wants_low  = any(x in query_lower for x in ["lowest", "least", "minimum", "worst", "low"])
     # Default to high if ambiguous
     direction = "desc" if wants_high or not wants_low else "asc"
 
@@ -722,6 +731,8 @@ def resolve_national_ranking(db: Session, query_lower: str) -> Optional[str]:
         metric_key = f"extraction_{direction}"
     elif any(x in query_lower for x in ["rainfall", "rain", "precipitation"]):
         metric_key = f"rainfall_{direction}"
+    elif any(x in query_lower for x in ["availability", "available", "surplus"]):
+        metric_key = f"availability_{direction}"
     else:
         # Fallback: groundwater level
         metric_key = "depth_asc" if wants_high else "depth_desc"
@@ -842,7 +853,7 @@ def resolve_national_ranking(db: Session, query_lower: str) -> Optional[str]:
     for i, (dist, state, val) in enumerate(results, 1):
         if col_name == "depth_to_water_level_m_bgl":
             val_str = f"{val:.2f} m bgl"
-        elif col_name in ("annual_groundwater_recharge_ham", "annual_groundwater_extraction_ham"):
+        elif col_name in ("annual_groundwater_recharge_ham", "annual_groundwater_extraction_ham", "net_groundwater_availability_ham"):
             val_str = f"{val:,.2f} ham"
         elif col_name == "stage_of_groundwater_extraction_percent":
             val_str = f"{val:.2f}%"
@@ -866,6 +877,187 @@ def resolve_national_ranking(db: Session, query_lower: str) -> Optional[str]:
         + f"\n**Source:** IN-GRES Groundwater Dataset (CGWB / IMD)\n"
     )
 
+# ---------------------------------------------------------------------------
+# State-Level Statistics Handler
+# ---------------------------------------------------------------------------
+def resolve_state_statistics(db: Session, state_name: str) -> Optional[str]:
+    """
+    Returns aggregate groundwater statistics for all districts within a given state.
+    Covers: assessment category breakdown, avg depth, total recharge, extraction,
+    net availability, avg rainfall, and a per-district summary table.
+    """
+    from app.models import GroundwaterObservation, GWRAAssessment, RainfallRecord
+    from sqlalchemy import func, desc as sa_desc
+
+    state_row = db.query(Geography.state_name).filter(
+        func.upper(Geography.state_name) == state_name.upper().strip()
+    ).first()
+    canonical_state = state_row[0] if state_row else None
+    if not canonical_state:
+        return None
+
+    # ── 1. GWRA Aggregates ────────────────────────────────────────────────
+    gwra_rows = (
+        db.query(
+            Geography.district_name,
+            GWRAAssessment.district_assessment_category,
+            GWRAAssessment.assessment_year,
+            GWRAAssessment.annual_groundwater_recharge_ham,
+            GWRAAssessment.annual_extractable_groundwater_resource_ham,
+            GWRAAssessment.annual_groundwater_extraction_ham,
+            GWRAAssessment.net_groundwater_availability_ham,
+            GWRAAssessment.stage_of_groundwater_extraction_percent,
+        )
+        .join(GWRAAssessment, GWRAAssessment.geography_id == Geography.id)
+        .filter(
+            Geography.state_name == canonical_state,
+            Geography.normalized_mandal_name == None,
+            Geography.normalized_village_name == None,
+        )
+        .order_by(sa_desc(GWRAAssessment.assessment_year), Geography.district_name)
+        .all()
+    )
+
+    if not gwra_rows:
+        return None
+
+    # Use most recent assessment year
+    latest_year = gwra_rows[0][2]
+    gwra_rows = [r for r in gwra_rows if r[2] == latest_year]
+
+    # ── 2. Depth to Water Level (avg per district) ───────────────────────
+    depth_rows = (
+        db.query(
+            Geography.district_name,
+            func.avg(GroundwaterObservation.depth_to_water_level_m_bgl).label("avg_depth"),
+        )
+        .join(GroundwaterObservation, GroundwaterObservation.geography_id == Geography.id)
+        .filter(
+            Geography.state_name == canonical_state,
+            GroundwaterObservation.depth_to_water_level_m_bgl != None,
+        )
+        .group_by(Geography.district_name)
+        .all()
+    )
+    depth_map = {r.district_name: r.avg_depth for r in depth_rows}
+
+    # ── 3. Rainfall (avg per district) ───────────────────────────────────
+    rain_rows = (
+        db.query(
+            Geography.district_name,
+            func.avg(RainfallRecord.rainfall_mm).label("avg_rain"),
+        )
+        .join(RainfallRecord, RainfallRecord.geography_id == Geography.id)
+        .filter(
+            Geography.state_name == canonical_state,
+            RainfallRecord.rainfall_mm != None,
+        )
+        .group_by(Geography.district_name)
+        .all()
+    )
+    rain_map = {r.district_name: r.avg_rain for r in rain_rows}
+
+    # ── 4. Build per-district rows ────────────────────────────────────────
+    category_counts: dict = {}
+    total_recharge = 0.0
+    total_extraction = 0.0
+    total_net = 0.0
+    total_extractable = 0.0
+    valid_recharge = valid_extraction = valid_net = valid_extractable = 0
+    district_rows = []
+
+    for row in gwra_rows:
+        dist_name = row[0]
+        cat = row[1] or "Unknown"
+        recharge = row[3]
+        extractable = row[4]
+        extraction = row[5]
+        net = row[6]
+        stage = row[7]
+        depth = depth_map.get(dist_name)
+        rainfall = rain_map.get(dist_name)
+
+        category_counts[cat] = category_counts.get(cat, 0) + 1
+
+        if recharge is not None:
+            total_recharge += recharge
+            valid_recharge += 1
+        if extraction is not None:
+            total_extraction += extraction
+            valid_extraction += 1
+        if net is not None:
+            total_net += net
+            valid_net += 1
+        if extractable is not None:
+            total_extractable += extractable
+            valid_extractable += 1
+
+        district_rows.append({
+            "district": dist_name,
+            "category": cat,
+            "depth": depth,
+            "rainfall": rainfall,
+            "recharge": recharge,
+            "extraction": extraction,
+            "stage": stage,
+            "net": net,
+        })
+
+    n_districts = len(district_rows)
+
+    # ── 5. Format Response ────────────────────────────────────────────────
+    # Category breakdown
+    cat_order = ["Safe", "Semi-Critical", "Critical", "Over-Exploited", "Saline", "Unknown"]
+    cat_lines = ""
+    for c in cat_order:
+        cnt = category_counts.get(c, 0)
+        if cnt:
+            bar = "█" * cnt
+            cat_lines += f"| {c} | {cnt} | {bar} |\n"
+
+    # Aggregate summary
+    recharge_str = f"{total_recharge:,.2f} ham" if valid_recharge else "N/A"
+    extraction_str = f"{total_extraction:,.2f} ham" if valid_extraction else "N/A"
+    net_str = f"{total_net:,.2f} ham" if valid_net else "N/A"
+    extractable_str = f"{total_extractable:,.2f} ham" if valid_extractable else "N/A"
+    overall_stage = f"{(total_extraction/total_extractable*100):.1f}%" if (valid_extraction and valid_extractable and total_extractable > 0) else "N/A"
+
+    # Per-district table (sorted by category severity then district name)
+    severity = {"Over-Exploited": 0, "Critical": 1, "Semi-Critical": 2, "Saline": 3, "Safe": 4, "Unknown": 5}
+    district_rows_sorted = sorted(district_rows, key=lambda r: (severity.get(r["category"], 5), r["district"]))
+
+    table_rows = ""
+    for d in district_rows_sorted:
+        depth_s = f"{d['depth']:.2f} m" if d["depth"] is not None else "—"
+        rain_s = f"{d['rainfall']:.0f} mm" if d["rainfall"] is not None else "—"
+        recharge_s = f"{d['recharge']:,.0f}" if d["recharge"] is not None else "—"
+        stage_s = f"{d['stage']:.1f}%" if d["stage"] is not None else "—"
+        table_rows += f"| {d['district']} | {d['category']} | {depth_s} | {rain_s} | {recharge_s} | {stage_s} |\n"
+
+    return (
+        f"## Groundwater Statistics — {canonical_state}\n\n"
+        f"**GWRA Assessment Year: {latest_year}** | **Total Districts: {n_districts}**\n\n"
+        f"---\n\n"
+        f"### Assessment Category Distribution\n\n"
+        f"| Category | Districts | Distribution |\n"
+        f"|---|---:|---|\n"
+        f"{cat_lines}\n"
+        f"### State-Level Aggregate Totals\n\n"
+        f"| Metric | Total / Value |\n"
+        f"|---|---:|\n"
+        f"| Annual Groundwater Recharge | {recharge_str} |\n"
+        f"| Annual Extractable Resource | {extractable_str} |\n"
+        f"| Annual Groundwater Extraction | {extraction_str} |\n"
+        f"| Net Groundwater Availability | {net_str} |\n"
+        f"| Overall Stage of Extraction | {overall_stage} |\n\n"
+        f"### District-wise Summary\n\n"
+        f"| District | Category | Avg Depth | Avg Rainfall | Annual Recharge (ham) | Stage (%) |\n"
+        f"|---|---|---:|---:|---:|---:|\n"
+        f"{table_rows}\n"
+        f"**Source:** GWRA {latest_year} / CGWB · Groundwater Observations · IMD Rainfall Dataset · IN-GRES\n"
+    )
+
+
 @router.post("/chat", response_model=ChatResponse)
 def chat_with_assistant(
     request: ChatRequest,
@@ -888,9 +1080,10 @@ def chat_with_assistant(
     db.add(user_msg)
     db.commit()
     
-    # 0. Check for unrelated query (but bypass if there is a pending clarification!)
+    # 0. Check for unrelated query (but bypass if there is a pending clarification or active follow-up!)
     is_clarifying = conv.pending_intent is not None and conv.pending_location is not None
-    if is_unrelated_query(query_text) and not is_clarifying:
+    is_followup = conv.current_intent is not None or conv.last_user_question is not None
+    if is_unrelated_query(query_text) and not is_clarifying and not is_followup:
         response_text = "This question is outside the scope of IN-GRES AI. I can help with groundwater levels, groundwater resources, rainfall, recharge, extraction, GWRA assessments, groundwater conservation, and related topics."
         
         # Log assistant message
@@ -992,10 +1185,10 @@ def chat_with_assistant(
         # National ranking: 'which district has highest/lowest X?' — check FIRST before all metric intents
         _is_rank_signal = any(x in query_lower for x in [
             "highest", "lowest", "most", "least", "which district has", "which districts have",
-            "maximum", "minimum", "top districts", "bottom districts"
+            "maximum", "minimum", "top districts", "bottom districts", "top", "bottom", "low", "high"
         ])
         _has_rank_metric = any(x in query_lower for x in [
-            "level", "depth", "recharge", "extraction", "stage", "rainfall", "rain"
+            "level", "depth", "recharge", "extraction", "stage", "rainfall", "rain", "availability", "available"
         ])
         if _is_rank_signal and _has_rank_metric and not _has_weather:
             detected_intent = "NATIONAL_RANKING"
@@ -1019,6 +1212,8 @@ def chat_with_assistant(
             detected_intent = "ASSESSMENT_CATEGORY"
         elif any(x in query_lower for x in ["availability", "available", "surplus"]):
             detected_intent = "NET_GROUNDWATER_AVAILABILITY"
+        elif any(x in query_lower for x in ["statistics", "stats", "overview", "summary", "profile", "groundwater data", "show", "all districts", "districts in"]):
+            detected_intent = "STATE_STATS"
 
     is_compare_requested = any(x in query_lower for x in ["compare", "vs", "versus", "difference", "which is higher", "which is lower"])
     if is_compare_requested:
@@ -1523,8 +1718,31 @@ def chat_with_assistant(
             response_text += "\n\n---\n\n" + weather_response_part
         
     else:
-        # General query or unresolved location query
-        if is_weather_query and weather_response_part:
+        # General query or unresolved location — check for state-level statistics first
+        active_intent_for_state = detected_intent or conv.current_intent
+        _state_in_query = None
+        _states_db = [s[0] for s in db.query(Geography.state_name).distinct().all()]
+        for _s in _states_db:
+            if _s.lower() in query_lower:
+                _state_in_query = _s
+                break
+
+        if _state_in_query and active_intent_for_state in [
+            "STATE_STATS", "GROUNDWATER_LEVEL", "GROUNDWATER_RESOURCE",
+            "RAINFALL", "RECHARGE", "EXTRACTION", "STAGE_OF_EXTRACTION",
+            "NET_GROUNDWATER_AVAILABILITY", "DISTRICT_STATUS", "GENERAL_GROUNDWATER",
+            None
+        ]:
+            state_stats_response = resolve_state_statistics(db, _state_in_query)
+            if state_stats_response:
+                response_text = state_stats_response
+            else:
+                if is_weather_query and weather_response_part:
+                    response_text = weather_response_part
+                else:
+                    verified_data = {"general_query": True}
+                    response_text = GeminiService.generate_chat_response(query_text, verified_data)
+        elif is_weather_query and weather_response_part:
             response_text = weather_response_part
         else:
             verified_data = {"general_query": True}
