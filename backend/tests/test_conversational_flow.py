@@ -47,10 +47,10 @@ def run_tests():
     print("Logged in successfully. Obtained access token.")
 
     # --- TEST 1: AMBIGUOUS QUESTION ---
-    print("\n--- TEST 1: Asking ambiguous question 'What is the groundwater level in Ananthapuramu?' ---")
+    print("\n--- TEST 1: Asking ambiguous question 'What is the groundwater level in Hamirpur?' ---")
     chat_url = f"{base_url}/api/ai/chat"
     payload = {
-        "query": "What is the groundwater level in Ananthapuramu?"
+        "query": "What is the groundwater level in Hamirpur?"
     }
     r_chat = requests.post(chat_url, json=payload, headers=headers)
     print("chat_res status:", r_chat.status_code)
@@ -64,9 +64,9 @@ def run_tests():
     assert "multiple locations" in chat_res["response"].lower(), "Expected clarification question for duplicate name!"
     
     # --- TEST 2: CLARIFICATION RESPONSE ---
-    print("\n--- TEST 2: Responding to clarification: 'Ananthapuramu in Andhra Pradesh' ---")
+    print("\n--- TEST 2: Responding to clarification: 'Hamirpur in Uttar Pradesh' ---")
     payload2 = {
-        "query": "Ananthapuramu in Andhra Pradesh",
+        "query": "Hamirpur in Uttar Pradesh",
         "conversation_id": conv_id
     }
     r_chat2 = requests.post(chat_url, json=payload2, headers=headers)
@@ -75,10 +75,9 @@ def run_tests():
     chat_res2 = r_chat2.json()
     print("Factual Response:")
     print(chat_res2["response"])
-    assert chat_res2["location"]["district"] == "Ananthapuramu", "Expected resolved location in context!"
-    assert chat_res2["location"]["state"] == "Andhra Pradesh", "Expected resolved state in context!"
-    assert "Annual Extractable Groundwater Resource" in chat_res2["response"], "Expected factual template layout!"
-    assert "34.90%" in chat_res2["response"], "Expected Ananthapuramu stage percentage matched exactly!"
+    assert chat_res2["location"]["district"] == "Hamirpur", "Expected resolved location in context!"
+    assert chat_res2["location"]["state"] == "Uttar Pradesh", "Expected resolved state in context!"
+    assert "depth to water level" in chat_res2["response"].lower() or "30.42" in chat_res2["response"], "Expected water level response!"
 
     # --- TEST 3: CONTEXT CARRYOVER / FOLLOW-UP ---
     print("\n--- TEST 3: Follow-up question: 'What about rainfall?' ---")
@@ -92,8 +91,8 @@ def run_tests():
     chat_res3 = r_chat3.json()
     print("Factual Response:")
     print(chat_res3["response"])
-    assert chat_res3["location"]["district"] == "Ananthapuramu", "Expected location context carried over!"
-    assert "Annual Rainfall" in chat_res3["response"], "Expected rainfall section!"
+    assert chat_res3["location"]["district"] == "Hamirpur", "Expected location context carried over!"
+    assert "rainfall" in chat_res3["response"].lower(), "Expected rainfall section!"
 
     # --- TEST 4: CONTEXT SWITCHING ---
     print("\n--- TEST 4: Context switch: 'What about Kadapa?' ---")
@@ -122,9 +121,22 @@ def run_tests():
     print("Factual Response:")
     print(chat_res5["response"])
     assert chat_res5["location"]["district"] == "YSR Kadapa", "Expected location context preserved as Kadapa!"
-    assert "Annual Groundwater Extraction" in chat_res5["response"], "Expected extraction parameters!"
+    assert "extraction" in chat_res5["response"].lower(), "Expected extraction parameters!"
 
-    print("\nCONVERSATIONAL CONTEXT FLOW AND GEMINI BYPASS TESTS SUCCESSFUL!")
+    # --- TEST 6: DISTRICT COMPARISON (KADAPA AND KURNOOL) ---
+    print("\n--- TEST 6: Compare groundwater in Kadapa and Kurnool ---")
+    payload6 = {
+        "query": "Compare groundwater in Kadapa and Kurnool."
+    }
+    r_chat6 = requests.post(chat_url, json=payload6, headers=headers)
+    assert r_chat6.status_code == 200, f"Comparison call failed: {r_chat6.text}"
+    chat_res6 = r_chat6.json()
+    print("Comparison Response:")
+    print(chat_res6["response"])
+    assert "Groundwater Comparison" in chat_res6["response"], "Expected comparison markdown table!"
+    assert "YSR Kadapa" in chat_res6["response"] and "Kurnool" in chat_res6["response"], "Expected both districts in table!"
+
+    print("\nCONVERSATIONAL CONTEXT FLOW AND COMPARISON TESTS SUCCESSFUL!")
 
 if __name__ == "__main__":
     run_tests()

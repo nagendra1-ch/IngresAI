@@ -14,6 +14,7 @@ from app.services.gemini_service import GeminiService
 from app.services.weather_service import WeatherService
 from app.services.knowledge_base import resolve_domain_knowledge
 from app.services.prediction_service import WaterLevelPredictionService
+from app.services.web_search_service import WebSearchService
 from app.routes.districts import resolve_district_response
 
 from app.config import settings
@@ -462,28 +463,37 @@ def resolve_query_geographies(db: Session, query_text: str):
         Geography.normalized_village_name == None
     ).all()
     
-    matched_geos = []
+    matched_map = {}  # geo_id -> (start_pos, geo)
+    
     for g in all_districts:
         g_name_lower = g.district_name.lower().strip()
         pattern = r'\b' + re.escape(g_name_lower) + r'\b'
-        if re.search(pattern, query_lower):
-            matched_geos.append(g)
-            
-    if not matched_geos:
-        aliases = db.query(GeographyAlias).join(Geography).filter(
-            Geography.normalized_mandal_name == None,
-            Geography.normalized_village_name == None
-        ).all()
-        for a in aliases:
-            a_name_lower = a.alias_name.lower().strip()
-            pattern = r'\b' + re.escape(a_name_lower) + r'\b'
-            if re.search(pattern, query_lower):
-                matched_geos.append(a.geography)
+        match = re.search(pattern, query_lower)
+        if match:
+            start_pos = match.start()
+            if g.id not in matched_map or start_pos < matched_map[g.id][0]:
+                g.matched_sublocation = None
+                matched_map[g.id] = (start_pos, g)
                 
-    # Fuzzy Matching Fallback
-    if not matched_geos:
-        import difflib
-        # Common English and domain-specific terms to ignore during fuzzy matching
+    # Always check aliases as well!
+    aliases = db.query(GeographyAlias).join(Geography).filter(
+        Geography.normalized_mandal_name == None,
+        Geography.normalized_village_name == None
+    ).all()
+    for a in aliases:
+        a_name_lower = a.alias_name.lower().strip()
+        pattern = r'\b' + re.escape(a_name_lower) + r'\b'
+        match = re.search(pattern, query_lower)
+        if match:
+            start_pos = match.start()
+            geo = a.geography
+            if geo.id not in matched_map or start_pos < matched_map[geo.id][0]:
+                geo.matched_sublocation = None
+                matched_map[geo.id] = (start_pos, geo)
+                
+    # Check Mandals and Villages in DB if no district match or if comparison needs 2
+    is_comp_hint = any(x in query_lower for x in ["compare", "comparison", "vs", "versus", "difference", "between", "which is higher", "which is lower"])
+    if not matched_map or (is_comp_hint and len(matched_map) < 2):
         ENGLISH_STOP_WORDS = {
             "what", "where", "when", "which", "who", "whom", "this", "that", "these", "those",
             "then", "than", "them", "they", "their", "there", "here", "with", "from", "about",
@@ -492,43 +502,33 @@ def resolve_query_geographies(db: Session, query_text: str):
             "districts", "state", "states", "mandal", "mandals", "village", "villages", "water",
             "level", "levels", "rainfall", "rain", "recharge", "extraction", "stage", "status",
             "category", "value", "values", "data", "report", "reports", "history", "trend",
-            "next", "last", "past", "future"
+            "next", "last", "past", "future", "compare", "comparison", "versus", "difference", "between",
+            "ground", "groundwater", "table", "depth", "give", "tell", "please", "help"
         }
-        # Extract alphanumeric words/tokens from the query of length >= 4, ignoring stop words
-        query_words = [w for w in re.findall(r'[a-z0-9]+', query_lower) if len(w) >= 4 and w not in ENGLISH_STOP_WORDS]
+        tokens = [w for w in re.findall(r'[a-z0-9]+', query_lower) if len(w) >= 4 and w not in ENGLISH_STOP_WORDS]
         
-        # Fuzzy match districts
-        for g in all_districts:
-            g_name_lower = g.district_name.lower().strip()
-            g_words = re.findall(r'[a-z0-9]+', g_name_lower)
-            for qw in query_words:
-                # Fuzzy check against the whole district name
-                if difflib.SequenceMatcher(None, qw, g_name_lower).ratio() >= 0.8:
-                    matched_geos.append(g)
-                    break
-                # Fuzzy check against individual words of the district name
-                if any(difflib.SequenceMatcher(None, qw, gw).ratio() >= 0.85 for gw in g_words):
-                    matched_geos.append(g)
-                    break
-                    
-        # Fuzzy match aliases if still empty
-        if not matched_geos:
-            aliases = db.query(GeographyAlias).join(Geography).filter(
-                Geography.normalized_mandal_name == None,
-                Geography.normalized_village_name == None
+        for tok in tokens:
+            m_matches = db.query(Geography).filter(
+                (Geography.mandal_name.ilike(tok)) | 
+                (Geography.village_name.ilike(tok))
             ).all()
-            for a in aliases:
-                a_name_lower = a.alias_name.lower().strip()
-                a_words = re.findall(r'[a-z0-9]+', a_name_lower)
-                for qw in query_words:
-                    if difflib.SequenceMatcher(None, qw, a_name_lower).ratio() >= 0.8:
-                        matched_geos.append(a.geography)
+            if m_matches:
+                first_m = m_matches[0]
+                parent_dist = db.query(Geography).filter(
+                    Geography.district_name == first_m.district_name,
+                    Geography.state_name == first_m.state_name,
+                    Geography.normalized_mandal_name == None,
+                    Geography.normalized_village_name == None
+                ).first()
+                if parent_dist:
+                    start_pos = query_lower.find(tok)
+                    parent_dist.matched_sublocation = first_m.mandal_name or first_m.village_name or tok.title()
+                    matched_map[parent_dist.id] = (start_pos if start_pos != -1 else 0, parent_dist)
+                    if not is_comp_hint:
                         break
-                    if any(difflib.SequenceMatcher(None, qw, aw).ratio() >= 0.85 for aw in a_words):
-                        matched_geos.append(a.geography)
-                        break
-                        
-    matched_geos = list(set(matched_geos))
+
+    # Sort matched geographies by appearance order in query
+    sorted_geos = [item[1] for item in sorted(matched_map.values(), key=lambda x: x[0])]
     
     # Filter using Authoritative Geography to prevent false ambiguities
     authoritative_map = {
@@ -536,6 +536,9 @@ def resolve_query_geographies(db: Session, query_text: str):
         "kurnool": "Andhra Pradesh",
         "ysr kadapa": "Andhra Pradesh",
         "kadapa": "Andhra Pradesh",
+        "ananthapuramu": "Andhra Pradesh",
+        "anantapur": "Andhra Pradesh",
+        "hapur": "Uttar Pradesh",
         "dr. b.r. ambedkar konaseema": "Andhra Pradesh",
         "konaseema": "Andhra Pradesh",
         "theni": "Tamil Nadu",
@@ -543,7 +546,7 @@ def resolve_query_geographies(db: Session, query_text: str):
     }
     
     filtered_geos = []
-    for g in matched_geos:
+    for g in sorted_geos:
         g_name_lower = g.district_name.lower().strip()
         if g_name_lower in authoritative_map:
             if g.state_name.lower().strip() != authoritative_map[g_name_lower].lower().strip():
@@ -562,6 +565,14 @@ def resolve_query_geographies(db: Session, query_text: str):
     
     if state_in_query:
         matched_geos = [g for g in matched_geos if g.state_name.lower() == state_in_query.lower()]
+        
+    # If single location was asked (not a comparison), keep only 1 match
+    if not is_comp_hint and len(matched_geos) > 1:
+        exact_matched = [g for g in matched_geos if re.search(r'\b' + re.escape(g.district_name.lower()) + r'\b', query_lower)]
+        if exact_matched:
+            matched_geos = exact_matched[:1]
+        else:
+            matched_geos = matched_geos[:1]
         
     return matched_geos, state_in_query
 
@@ -1160,8 +1171,11 @@ def chat_with_assistant(
     is_clarifying = conv.pending_intent is not None and conv.pending_location is not None
     is_followup = conv.current_intent is not None or conv.last_user_question is not None
 
-    # 0. Check for conceptual domain knowledge or FAQ questions first
-    domain_match = resolve_domain_knowledge(query_text)
+    # 4. Resolve location candidates first
+    matched_geos, state_in_query = resolve_query_geographies(db, query_text)
+
+    # 0. Check for conceptual domain knowledge or FAQ questions (only if no specific location was requested)
+    domain_match = resolve_domain_knowledge(query_text) if not matched_geos and not state_in_query else None
     if domain_match and not is_clarifying:
         response_text = domain_match["response"]
         sources = domain_match.get("sources", ["Central Ground Water Board (CGWB)", "IN-GRES"])
@@ -1219,9 +1233,9 @@ def chat_with_assistant(
             }
         }
 
-    # 2. Check for unrelated query (but bypass if there is a pending clarification or active follow-up!)
+    # 2. Check for unrelated query / external questions -> Search Google!
     if is_unrelated_query(query_text) and not is_clarifying and not is_followup:
-        response_text = "This question is outside the scope of IN-GRES AI. I can help with groundwater levels, groundwater resources, rainfall, recharge, extraction, GWRA assessments, groundwater conservation, and related topics."
+        response_text, search_sources = WebSearchService.answer_with_web_search(query_text)
         
         # Log assistant message
         asst_msg = ConversationMessage(conversation_id=conv_id, sender="assistant", text=response_text)
@@ -1238,7 +1252,7 @@ def chat_with_assistant(
             "groundwater": None,
             "rainfall": None,
             "resources": None,
-            "sources": [],
+            "sources": search_sources,
             "conversation_context": {
                 "location_resolved": False,
                 "intent_resolved": True
@@ -1355,18 +1369,23 @@ def chat_with_assistant(
         elif any(x in query_lower for x in ["statistics", "stats", "overview", "summary", "profile", "groundwater data", "show", "all districts", "districts in"]):
             detected_intent = "STATE_STATS"
 
-    is_compare_requested = any(x in query_lower for x in ["compare", "vs", "versus", "difference", "which is higher", "which is lower"])
+    is_compare_requested = any(x in query_lower for x in ["compare", "comparison", "vs", "versus", "difference", "which is higher", "which is lower", "which has higher", "which has lower", "which is better", "which is deeper", "which is shallower", "between"])
     if is_compare_requested:
         detected_intent = "COMPARISON"
+        
+    # 4. Resolve location candidates
+    matched_geos, state_in_query = resolve_query_geographies(db, query_text)
+
+    if len(matched_geos) >= 2 and is_compare_requested:
+        detected_intent = "COMPARISON"
+    elif len(matched_geos) >= 2 and not is_compare_requested:
+        matched_geos = matched_geos[:1]
         
     # Update active intent if detected
     if detected_intent:
         if detected_intent != "RANK_STATE_MOST_CATEGORY":
             conv.current_intent = detected_intent
             db.commit()
-        
-    # 4. Resolve location candidates
-    matched_geos, state_in_query = resolve_query_geographies(db, query_text)
     
     # 5. Clarification Loop Resolution
     # If there is a pending clarification
@@ -1886,11 +1905,14 @@ def chat_with_assistant(
         geo = matched_geos[0]
         details = resolve_district_response(db, geo)
         
+        subloc = getattr(geo, "matched_sublocation", None)
+        loc_display = f"{subloc} ({details['district_name']}, {details['state_name']})" if subloc else details["district_name"]
+
         # Populate response schemas
         location_schema = LocationSchema(
             country=details["location"]["country"],
             state=details["location"]["state"],
-            district=details["location"]["district"]
+            district=f"{details['location']['district']} ({subloc})" if subloc else details["location"]["district"]
         )
         assessment_schema = AssessmentSchema(
             year=details["assessment"]["year"],
@@ -1931,7 +1953,7 @@ def chat_with_assistant(
             response_text = GeminiService.generate_chat_response(query_text, verified_data)
         elif is_simple and is_concise_requested:
             # Concise response for simple queries
-            name = details["district_name"]
+            name = loc_display
             if conv.current_intent == "GROUNDWATER_LEVEL":
                 indicator = details["groundwater"]["groundwater_level_indicator_percent"]
                 depth = details["groundwater"]["depth_to_water_level_m_bgl"]
@@ -1941,36 +1963,69 @@ def chat_with_assistant(
                     elif depth is not None:
                         response_text = f"The depth to water level in {name} is {depth:.2f} m bgl."
                     else:
-                        response_text = f"Groundwater level data is unavailable for {name}."
-                elif depth is not None:
-                    if indicator is not None:
-                        response_text = f"The depth to water level in {name} is {depth:.2f} m bgl (Groundwater Level Indicator: {indicator:.2f}%)."
-                    else:
+                        response_text, s_list = WebSearchService.answer_with_web_search(query_text)
+                        sources = s_list
+                elif any(x in query_lower for x in ["depth", "m bgl", "mbgl"]):
+                    if depth is not None:
                         response_text = f"The depth to water level in {name} is {depth:.2f} m bgl."
+                    elif indicator is not None:
+                        response_text = f"The groundwater level indicator in {name} is {indicator:.2f}%."
+                    else:
+                        response_text, s_list = WebSearchService.answer_with_web_search(query_text)
+                        sources = s_list
+                elif indicator is not None and depth is not None:
+                    response_text = f"The groundwater level in {name} is {indicator:.2f}% (Depth to water level: {depth:.2f} m bgl)."
                 elif indicator is not None:
                     response_text = f"The groundwater level in {name} is {indicator:.2f}%."
+                elif depth is not None:
+                    response_text = f"The depth to water level in {name} is {depth:.2f} m bgl."
                 else:
-                    response_text = f"Groundwater level data is unavailable for {name}."
+                    response_text, s_list = WebSearchService.answer_with_web_search(query_text)
+                    sources = s_list
             elif conv.current_intent == "RAINFALL":
                 rainfall = details["rainfall"]["value_mm"]
-                response_text = f"The rainfall in {name} is {rainfall:.1f} mm." if rainfall is not None else f"Rainfall data is unavailable for {name}."
+                if rainfall is not None:
+                    response_text = f"The rainfall in {name} is {rainfall:.1f} mm."
+                else:
+                    response_text, s_list = WebSearchService.answer_with_web_search(query_text)
+                    sources = s_list
             elif conv.current_intent == "RECHARGE":
                 recharge = details["resources"]["annual_recharge_ham"]
-                response_text = f"The annual groundwater recharge in {name} is {recharge:,.2f} ham." if recharge is not None else f"Groundwater recharge data is unavailable for {name}."
+                if recharge is not None:
+                    response_text = f"The annual groundwater recharge in {name} is {recharge:,.2f} ham."
+                else:
+                    response_text, s_list = WebSearchService.answer_with_web_search(query_text)
+                    sources = s_list
             elif conv.current_intent == "EXTRACTION":
                 extraction = details["resources"]["annual_extraction_ham"]
-                response_text = f"The annual groundwater extraction in {name} is {extraction:,.2f} ham." if extraction is not None else f"Groundwater extraction data is unavailable for {name}."
+                if extraction is not None:
+                    response_text = f"The annual groundwater extraction in {name} is {extraction:,.2f} ham."
+                else:
+                    response_text, s_list = WebSearchService.answer_with_web_search(query_text)
+                    sources = s_list
             elif conv.current_intent == "STAGE_OF_EXTRACTION":
                 stage = details["resources"]["stage_of_extraction_percent"]
                 cat = details["assessment"]["category"]
                 cat_suffix = f" (Assessment Category: {cat})" if cat else ""
-                response_text = f"The stage of groundwater extraction in {name} is {stage:.2f}%{cat_suffix}." if stage is not None else f"Stage of groundwater extraction is unavailable for {name}."
+                if stage is not None:
+                    response_text = f"The stage of groundwater extraction in {name} is {stage:.2f}%{cat_suffix}."
+                else:
+                    response_text, s_list = WebSearchService.answer_with_web_search(query_text)
+                    sources = s_list
             elif conv.current_intent == "ASSESSMENT_CATEGORY":
                 cat = details["assessment"]["category"]
-                response_text = f"The assessment category for {name} is {cat}." if cat else f"Assessment category is unavailable for {name}."
+                if cat:
+                    response_text = f"The assessment category for {name} is {cat}."
+                else:
+                    response_text, s_list = WebSearchService.answer_with_web_search(query_text)
+                    sources = s_list
             elif conv.current_intent == "NET_GROUNDWATER_AVAILABILITY":
                 net_avail = details["resources"]["net_groundwater_availability_ham"]
-                response_text = f"The net groundwater availability for future use in {name} is {net_avail:,.2f} ham." if net_avail is not None else f"Net groundwater availability is unavailable for {name}."
+                if net_avail is not None:
+                    response_text = f"The net groundwater availability for future use in {name} is {net_avail:,.2f} ham."
+                else:
+                    response_text, s_list = WebSearchService.answer_with_web_search(query_text)
+                    sources = s_list
         elif is_simple or not settings.GEMINI_API_KEY:
             # Gemini Bypass: Return database results directly!
             response_text = generate_factual_response(details)
@@ -1989,7 +2044,7 @@ def chat_with_assistant(
             sources.append("Open-Meteo")
             
     # Comparison case
-    elif len(matched_geos) >= 2 and is_compare_requested:
+    elif len(matched_geos) >= 2:
         geo1 = matched_geos[0]
         geo2 = matched_geos[1]
         
@@ -2014,6 +2069,10 @@ def chat_with_assistant(
         # Append weather for comparison if requested
         if is_weather_query and weather_response_part:
             response_text += "\n\n---\n\n" + weather_response_part
+            
+    elif len(matched_geos) == 1 and is_compare_requested:
+        d_name = matched_geos[0].district_name
+        response_text = f"To compare groundwater data for **{d_name}**, please specify a second district (e.g. *'Compare {d_name} and Kurnool'* or *'Compare {d_name} and Guntur'*)."
         
     else:
         # General query or unresolved location — check for state-level statistics first
@@ -2042,9 +2101,13 @@ def chat_with_assistant(
                     response_text = GeminiService.generate_chat_response(query_text, verified_data)
         elif is_weather_query and weather_response_part:
             response_text = weather_response_part
-        else:
+        elif conv.current_intent == "RECOMMENDATION" or any(x in query_lower for x in ["suggestion", "suggestions", "tip", "tips", "recommend", "recommendation", "how to improve", "how to conserve", "how to save", "practices"]):
             verified_data = {"general_query": True}
             response_text = GeminiService.generate_chat_response(query_text, verified_data)
+            sources = ["Central Ground Water Board (CGWB)", "IN-GRES"]
+        else:
+            response_text, s_list = WebSearchService.answer_with_web_search(query_text)
+            sources = s_list
         
     # Log assistant message
     asst_msg = ConversationMessage(conversation_id=conv_id, sender="assistant", text=response_text)

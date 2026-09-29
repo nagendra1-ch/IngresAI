@@ -6,6 +6,7 @@ import re
 from app.utils.temporal import normalize_period_with_year, validate_and_normalize_metadata
 
 from app.services.knowledge_base import resolve_domain_knowledge
+from app.services.web_search_service import WebSearchService
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ if settings.GEMINI_API_KEY:
 from app.utils.cache import TTLCache
 
 _ai_response_cache = TTLCache(default_ttl_seconds=300)
+_gemini_disabled = False
 
 class GeminiService:
     @staticmethod
@@ -25,8 +27,9 @@ class GeminiService:
         """
         Invokes Gemini to classify user query intent and extract district/state names.
         """
-        if not settings.GEMINI_API_KEY:
-            return {"error": "API key missing"}
+        global _gemini_disabled
+        if not settings.GEMINI_API_KEY or _gemini_disabled:
+            return {"error": "API key missing or disabled"}
             
         try:
             prompt = (
@@ -54,6 +57,8 @@ class GeminiService:
             cleaned_json = re.sub(r'^```json\s*|```\s*$', '', text, flags=re.MULTILINE)
             return json.loads(cleaned_json)
         except Exception as e:
+            if "401" in str(e) or "authentication" in str(e).lower() or "unsupported" in str(e).lower():
+                _gemini_disabled = True
             logger.warning(f"Classification via Gemini skipped/failed ({e}). Using local entity extraction.")
             return {"error": str(e)}
 
@@ -61,47 +66,43 @@ class GeminiService:
     def generate_chat_response(query: str, verified_data: dict) -> str:
         """
         Sends verified database info along with question to Gemini with strict system prompt.
-        Uses in-memory cache and resilient fallback.
+        Uses in-memory cache and resilient fallback to database or Google Search.
         """
         cache_key = f"chat_{query.strip().lower()}_{hash(json.dumps(verified_data, sort_keys=True, default=str))}"
         cached = _ai_response_cache.get(cache_key)
         if cached:
             return cached
 
-        if not settings.GEMINI_API_KEY:
+        query_lower = query.lower().strip()
+        is_rec_or_domain = any(x in query_lower for x in [
+            "improve", "increase", "conserve", "save", "depletion", "suggestion", "suggestions",
+            "recommend", "recommendation", "recommendations", "prevent", "practice", "practices",
+            "method", "methods", "tip", "tips", "manage", "management", "how to", "how can", "what should"
+        ]) or resolve_domain_knowledge(query) is not None
+
+        # If general query or no verified data found, search Google directly (unless recommendation/domain knowledge)
+        if verified_data.get("general_query") and len(verified_data) == 1 and not is_rec_or_domain:
+            resp, _ = WebSearchService.answer_with_web_search(query)
+            _ai_response_cache.set(cache_key, resp)
+            return resp
+
+        global _gemini_disabled
+        if not settings.GEMINI_API_KEY or globals().get("_gemini_disabled", False):
             fallback = GeminiService._generate_fallback_response(query, verified_data)
             _ai_response_cache.set(cache_key, fallback)
             return fallback
         
         try:
             system_instruction = (
-                "You are IN-GRES AI, the official virtual assistant for India's Ground Water Resource Estimation System (INGRES / Indian Ground Water Resource Estimation System). "
-                "INGRES was developed by the Central Ground Water Board (CGWB), Ministry of Jal Shakti, Government of India, in collaboration with IIT Hyderabad. "
-                "Answer user queries in a simple, structured, and understandable language with markdown formatting.\n\n"
-                "### SCIENTIFIC AND DOMAIN KNOWLEDGE RULES:\n"
-                "1. If the user asks conceptual or general domain questions (e.g., 'What is INGRES?', 'How to use chatbot?', 'What is GEC methodology?', 'What do Safe/Critical categories mean?', 'What is Stage of Extraction?', 'What are artificial recharge structures?', 'What is ham?'), answer comprehensively using official CGWB / Ministry of Jal Shakti guidelines.\n"
-                "2. When district-specific data is provided in Verified Data: Use ONLY the verified data supplied in the context. Never invent or assume numerical values.\n"
-                "3. Groundwater level represents either Depth to Water Level (measured in 'm bgl') or Groundwater Level Indicator (measured in '%'). "
-                "If the user asks for the groundwater level (or level percentage / indicator), display the percentage value. "
-                "Keep depth to water level in 'm bgl' and level indicator in '%' distinct, and answer exactly what was requested.\n"
-                "4. Describe depth comparisons neutrally: do NOT call a deeper water table automatically 'better' or 'worse'. Use terms like 'deeper' or 'shallower'.\n"
-                "5. Stage of groundwater extraction is a percentage (%). Formula: (Gross Annual Extraction / Annual Extractable Resource) * 100.\n"
-                "6. Volumetric resources (recharge, extraction, availability) are in hectare-meters ('ham', where 1 ham = 10,000 m³ = 10 million liters). Rainfall is in millimeters ('mm').\n"
-                "7. Assessment Categories: Safe (<=70%), Semi-Critical (70-90%), Critical (90-100%), Over-Exploited (>100%), Saline.\n"
-                "8. If any data field is null, None, or missing, clearly state that 'Data unavailable' for that metric. Do not convert null to zero.\n"
-                "9. Preserve and mention the source years and periods if provided. Do not replace assessment year with the current year.\n"
-                "10. If the user asks for suggestions, recommendations, or how to increase, improve, conserve, or recharge groundwater:\n"
-                "   a. If the question is district-specific (e.g. Kadapa), structure the response with exactly these four headers:\n"
-                "      ### Current Situation\n"
-                "      ### Possible Causes\n"
-                "      ### Recommended Actions\n"
-                "      ### Monitoring\n"
-                "   b. If general, provide practical methods (check dams, percolation tanks, recharge shafts, drip irrigation, crop diversification) and explicitly state that recommendations are general.\n"
-                "11. Weather questions (temperature, humidity, forecast, etc.) are IN-SCOPE via Open-Meteo live weather.\n"
-                "12. If the query is completely unrelated to groundwater, water, rainfall, weather, recharge, extraction, or conservation, respond with exactly: "
-                "'This question is outside the scope of IN-GRES AI. I can help with groundwater levels, groundwater resources, rainfall, recharge, extraction, GWRA assessments, groundwater conservation, current weather conditions, and related topics.'\n"
-                "13. DO NOT return the current GWRA recharge value as a future prediction/forecast. If asked about future forecasts, state: 'Future groundwater recharge cannot be reliably predicted from the current GWRA dataset alone. The available [recharge_value] ham is the assessed annual recharge value, not a two-year forecast.'\n"
-                "14. Keep single-metric district answers concise."
+                "You are IN-GRES AI, the official virtual assistant for India's Ground Water Resource Estimation System (INGRES). "
+                "INGRES was developed by the Central Ground Water Board (CGWB), Ministry of Jal Shakti, Government of India, in collaboration with IIT Hyderabad.\n\n"
+                "### CORE ANSWERING RULES:\n"
+                "1. Answer user queries strictly, directly, and concisely. Give ONLY the answer to what was asked without unnecessary extra paragraphs or exceeding limits.\n"
+                "2. When district-specific data is provided in Verified Data: Use ONLY the verified data supplied in the context. Never invent numerical values.\n"
+                "3. If the user asks for the groundwater level (or level percentage / indicator), display the percentage value (e.g. 'The groundwater level in Kadapa is 95.41% (Depth to water level: 4.64 m bgl).').\n"
+                "4. If any data field is null, None, or missing, clearly state that 'Data unavailable' or search Google.\n"
+                "5. If the user asks for suggestions, recommendations, tips, or conservation methods, ALWAYS structure the response with clear, actionable bullet or numbered points (e.g. 1. Rainwater Harvesting, 2. Rooftop Rainwater Harvesting, 3. Micro-Irrigation, 4. Restoration of Water Bodies, 5. Crop Selection & Mulching).\n"
+                "6. If the query cannot be answered from Verified Data, use factual search results to provide a direct, concise 1-2 sentence answer."
             )
             
             model = genai.GenerativeModel(
@@ -111,18 +112,20 @@ class GeminiService:
             )
             
             prompt = (
-                f"System Prompt: Use only the verified data and domain knowledge to answer the user's question. "
-                f"If the data is missing, null, or empty, state that the data is unavailable. Do not make up any values.\n\n"
+                f"System Prompt: Answer the user's question directly and concisely using verified data. "
+                f"Do not exceed the requested limit.\n\n"
                 f"Verified Data: {verified_data}\n\n"
                 f"User Question: {query}"
             )
             
-            response = model.generate_content(prompt, request_options={"timeout": 4.0})
+            response = model.generate_content(prompt, request_options={"timeout": 2.5})
             out = response.text.strip()
             _ai_response_cache.set(cache_key, out)
             return out
             
         except Exception as e:
+            if "401" in str(e) or "authentication" in str(e).lower():
+                globals()["_gemini_disabled"] = True
             logger.warning(f"Gemini API unavailable ({e}). Using optimized factual generator.")
             fallback = GeminiService._generate_fallback_response(query, verified_data)
             _ai_response_cache.set(cache_key, fallback)
@@ -153,6 +156,7 @@ class GeminiService:
             response = model.generate_content(prompt, request_options={"timeout": 4.0})
             out = response.text.strip()
             _ai_response_cache.set(cache_key, out)
+            return out
         except Exception as e:
             logger.warning(f"Comparison via Gemini skipped/failed ({e}). Using factual comparison fallback.")
             fallback = GeminiService._generate_fallback_response(f"Compare {name1} and {name2}", verified_data)
@@ -162,7 +166,8 @@ class GeminiService:
     @staticmethod
     def _generate_fallback_response(query: str, verified_data: dict) -> str:
         """
-        Guaranteed non-hallucinated fallback response formatting verified DB values and domain knowledge.
+        Guaranteed non-hallucinated fallback response formatting verified DB values,
+        domain knowledge, and Google Search fallback.
         """
         query_lower = query.lower().strip()
         
@@ -189,31 +194,6 @@ class GeminiService:
                 "• **Live Weather Forecasts** — Current temperature and conditions for any district\n\n"
                 "How can I assist you today? Feel free to ask a question or name any district or state!"
             )
-
-        # Check for unrelated query
-        is_unrelated = True
-        groundwater_keywords = {
-            "groundwater", "water", "rainfall", "rain", "recharge", "extraction", "stage", "gwra",
-            "aquifer", "borewell", "wells", "well", "cgwb", "infiltration", "conservation", "irrigation",
-            "crop", "crops", "depth", "level", "drought", "depletion", "monsoon", "precipitation",
-            "safe", "critical", "over-exploited", "semi-critical", "saline", "district", "districts",
-            "mandal", "mandals", "village", "villages", "state", "states", "compare", "conservation",
-            "harvesting", "pit", "pits", "dam", "dams", "tank", "tanks", "pond", "ponds", "trench", "trenches",
-            "watershed", "drip", "sprinkler", "ambedkar", "konaseema", "ysr", "kadapa", "guntur", "ananthapuramu",
-            "kurnool", "theni", "nilgiris", "ingres", "in-gres", "gec", "methodology", "ham", "mbgl", "m bgl", "indicator"
-        }
-        # Weather keywords are also in-scope for IN-GRES AI
-        weather_keywords = {
-            "weather", "temperature", "humidity", "forecast", "raining", "wind", "windspeed",
-            "sunny", "cloudy", "storm", "thunderstorm", "drizzle", "heatwave", "haze",
-            "feels", "apparent", "condition", "hot", "cold", "cool", "warm", "climate"
-        }
-        words = re.findall(r'[a-z0-9]+', query_lower)
-        if any(w in groundwater_keywords for w in words) or any(w in weather_keywords for w in words):
-            is_unrelated = False
-            
-        if is_unrelated:
-            return "This question is outside the scope of IN-GRES AI. I can help with groundwater levels, groundwater resources, rainfall, recharge, extraction, GWRA assessments, groundwater conservation, current weather conditions, and related topics."
 
         # Check if recommendations/suggestions are requested
         is_recommendation = any(x in query_lower for x in ["improve", "increase", "conserve", "save", "depletion", "suggestion", "suggestions", "recommend", "recommendation", "recommendations", "prevent", "practice", "practices", "method", "methods", "tip", "tips", "manage", "management", "how to", "how can", "what should", "what can"])
@@ -257,7 +237,7 @@ class GeminiService:
                         f"{rows_str}\n"
                         f"*(Note: Feasibility of long-term trends depends on data availability. The above table shows all recorded surveys for {name}.)*"
                     )
-            return "I couldn't find historical trend data for comparison in the database."
+            return WebSearchService.answer_with_web_search(query)[0]
 
         if is_recommendation:
             # Check for a specific district context first
@@ -337,7 +317,7 @@ class GeminiService:
             d2 = comp_data.get("district_2") or comp_data.get("district2") or verified_data.get("district_2") or verified_data.get("district2")
             
             if not d1 or not d2:
-                return "I couldn't find reliable groundwater data for comparison in the database."
+                return WebSearchService.answer_with_web_search(query)[0]
                 
             name1 = d1.get("district_name") or d1.get("name")
             state1 = d1.get("state_name") or d1.get("state")
@@ -588,48 +568,57 @@ class GeminiService:
             
             if is_concise_requested:
                 # 1. Groundwater Level / Indicator
-                if any(x in query_lower for x in ["groundwater level", "ground water level", "level", "indicator"]):
+                if any(x in query_lower for x in ["groundwater level", "ground water level", "water level", "level", "indicator"]):
                     if any(x in query_lower for x in ["percent", "percentage", "indicator"]):
                         if indicator is not None:
                             return f"The groundwater level indicator in {name} is {indicator:.2f}%."
                         elif depth is not None:
                             return f"The depth to water level in {name} is {depth:.2f} m bgl."
-                    elif depth is not None:
-                        if indicator is not None:
-                            return f"The depth to water level in {name} is {depth:.2f} m bgl (Groundwater Level Indicator: {indicator:.2f}%)."
-                        return f"The depth to water level in {name} is {depth:.2f} m bgl."
+                    elif any(x in query_lower for x in ["depth", "m bgl", "mbgl"]):
+                        if depth is not None:
+                            return f"The depth to water level in {name} is {depth:.2f} m bgl."
+                    elif indicator is not None and depth is not None:
+                        return f"The groundwater level in {name} is {indicator:.2f}% (Depth to water level: {depth:.2f} m bgl)."
                     elif indicator is not None:
                         return f"The groundwater level in {name} is {indicator:.2f}%."
-                    return f"Groundwater level data is unavailable for {name}."
+                    elif depth is not None:
+                        return f"The depth to water level in {name} is {depth:.2f} m bgl."
+                    return WebSearchService.answer_with_web_search(f"groundwater level in {name}")[0]
                     
                 # 2. Rainfall
-                elif "rain" in query_lower:
+                elif any(x in query_lower for x in ["rainfall", "rain", "precipitation"]):
                     if rainfall is not None:
                         return f"The rainfall in {name} is {rainfall:.1f} mm."
-                    return f"Rainfall data is unavailable for {name}."
+                    return WebSearchService.answer_with_web_search(f"rainfall in {name}")[0]
                     
                 # 3. Recharge
-                elif "recharge" in query_lower:
+                elif any(x in query_lower for x in ["recharge", "replenish"]):
                     if recharge is not None:
                         return f"The annual groundwater recharge in {name} is {recharge:,.2f} ham."
-                    return f"Groundwater recharge data is unavailable for {name}."
+                    return WebSearchService.answer_with_web_search(f"annual groundwater recharge in {name}")[0]
                     
                 # 4. Extraction & Stage of Extraction / Percentage
-                elif any(x in query_lower for x in ["extraction", "stage", "percentage", "percent"]):
+                elif any(x in query_lower for x in ["extraction", "stage", "draft"]):
                     if any(x in query_lower for x in ["stage", "percentage", "percent", "rate"]):
                         if stage is not None:
                             cat_suffix = f" (Assessment Category: {cat})" if cat else ""
                             return f"The stage of groundwater extraction in {name} is {stage:.2f}%{cat_suffix}."
-                        return f"Stage of groundwater extraction is unavailable for {name}."
+                        return WebSearchService.answer_with_web_search(f"stage of groundwater extraction in {name}")[0]
                     elif extraction is not None:
                         return f"The annual groundwater extraction in {name} is {extraction:,.2f} ham."
-                    return f"Groundwater extraction data is unavailable for {name}."
+                    return WebSearchService.answer_with_web_search(f"groundwater extraction in {name}")[0]
                     
                 # 5. Category
                 elif any(x in query_lower for x in ["category", "classification", "status"]):
                     if cat:
                         return f"The assessment category for {name} is {cat}."
-                    return f"Assessment category is unavailable for {name}."
+                    return WebSearchService.answer_with_web_search(f"groundwater assessment category for {name}")[0]
+
+                # 6. Availability
+                elif any(x in query_lower for x in ["availability", "available", "surplus"]):
+                    if net_avail is not None:
+                        return f"The net groundwater availability for future use in {name} is {net_avail:,.2f} ham."
+                    return WebSearchService.answer_with_web_search(f"net groundwater availability in {name}")[0]
 
             # Otherwise return standard full table
             return (
@@ -653,9 +642,6 @@ class GeminiService:
                 f"- Rainfall: {rain_src}\n"
             )
             
-        return (
-            "I couldn't find specific groundwater data for that query in the IN-GRES database. "
-            "Try asking about a specific district (e.g. *'What is the groundwater level in Guntur?'*), "
-            "compare two districts (e.g. *'Compare Kurnool and Guntur'*), "
-            "or ask a national ranking question (e.g. *'Which district has the highest groundwater level?'*)."
-        )
+        # If no verified data found in database, fallback to Google Search!
+        resp, _ = WebSearchService.answer_with_web_search(query)
+        return resp

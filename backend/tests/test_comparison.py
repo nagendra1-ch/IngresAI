@@ -203,5 +203,21 @@ class TestGeminiServiceInstructions(unittest.TestCase):
         self.assertIn("interpreted with caution", response)
         self.assertIn("different periods", response)
 
+
+class TestGeographyQueryResolution(unittest.TestCase):
+    def test_compare_alias_and_district_name(self):
+        from app.database import SessionLocal
+        from app.routes.ai import resolve_query_geographies
+        db = SessionLocal()
+        try:
+            geos, _ = resolve_query_geographies(db, "Compare groundwater in Kadapa and Kurnool.")
+            names = [g.district_name for g in geos]
+            self.assertEqual(len(names), 2)
+            self.assertEqual(names[0], "YSR Kadapa")
+            self.assertEqual(names[1], "Kurnool")
+        finally:
+            db.close()
+
+
 if __name__ == "__main__":
     unittest.main()
